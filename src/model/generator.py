@@ -134,7 +134,12 @@ class HiFiPlusGenerator(torch.nn.Module):
         upsample_block_rates=[2, 2],
         upsample_init_channels = 1,
         upsample_block_kernel_sizes=[4, 4], 
-
+        kernel_sizes_mrf = [3, 5, 7],
+        dilations_mrf = [
+            [[1, 3, 5], [1, 3, 5]],
+            [[1, 3], [1, 3]],
+            [[1], [1]]
+        ],
 
         residual_channels=64,
         bsft_channels=64,
@@ -170,7 +175,9 @@ class HiFiPlusGenerator(torch.nn.Module):
         self.upsampling_block2 = upsampling_utils.UpsampleTwice(upsample_init_channels, upsample_block_rates, upsample_block_kernel_sizes)
         self.nw_block1 = upsampling_utils.NUWaveBlock(residual_channels, bsft_channels)
         self.nw_block2 = upsampling_utils.NUWaveBlock(residual_channels, bsft_channels)
-
+        if kernel_sizes_mrf is not None:
+            self.upsampling_block = upsampling_utils.UpsampleTwiceWithMRF(hifi_upsample_initial_channel, upsample_block_rates, \
+                                                               upsample_block_kernel_sizes, kernel_sizes_mrf, dilations_mrf)
         self.hifi = upsampling_utils.HiFiUpsampling(
             resblock=hifi_resblock,
             upsample_initial_channel=hifi_upsample_initial_channel,
@@ -330,6 +337,8 @@ class A2AHiFiPlusGenerator(HiFiPlusGenerator):
             spectralunet_block_widths=spectralunet_block_widths,
             spectralunet_block_depth=spectralunet_block_depth,
             spectralunet_positional_encoding=spectralunet_positional_encoding,
+            kernel_sizes_mrf=None,
+            dilations_mrf=None,
 
             use_waveunet=use_waveunet,
             waveunet_block_widths=waveunet_block_widths,
@@ -507,6 +516,174 @@ class A2AHiFiPlusGenerator(HiFiPlusGenerator):
             x = self.apply_spectralmasknet(x)
         if self.use_waveunet and not self.waveunet_before_spectralmasknet:
             x = self.apply_waveunet_a2a(x, padded_reference)
+        x = self.conv_post(x)
+        x = torch.tanh(x)
+
+        return x[..., :target_size]
+    
+
+class A2AHiFiPlusGeneratorWithMRF(HiFiPlusGenerator):
+    def __init__(
+        self,
+        hifi_resblock="1",
+        hifi_upsample_rates=(8, 8, 2, 2),
+        hifi_upsample_kernel_sizes=(16, 16, 4, 4),
+        hifi_upsample_initial_channel=128,
+        hifi_resblock_kernel_sizes=(3, 7, 11),
+        hifi_resblock_dilation_sizes=((1, 3, 5), (1, 3, 5), (1, 3, 5)),
+        hifi_input_channels=128,
+        hifi_conv_pre_kernel_size=1,
+
+        upsample_init_channels = 513,
+        upsample_block_rates=[2],
+        upsample_block_kernel_sizes=[4], 
+        kernel_sizes_mrf = [3, 5, 7],
+        dilations_mrf= [
+            [[1, 3, 5], [1, 3, 5]],
+            [[1, 3], [1, 3]],
+            [[1], [1]]
+        ],
+
+        use_spectralunet=True,
+        spectralunet_block_widths=(8, 16, 24, 32, 64),
+        spectralunet_block_depth=5,
+        spectralunet_positional_encoding=True,
+
+        use_waveunet=True,
+        waveunet_block_widths=(10, 20, 40, 80),
+        waveunet_block_depth=4,
+
+        use_spectralmasknet=True,
+        spectralmasknet_block_widths=(8, 12, 24, 32),
+        spectralmasknet_block_depth=4,
+
+        norm_type: Literal["weight", "spectral"] = "weight",
+        use_skip_connect=True,
+        waveunet_before_spectralmasknet=True,
+
+        waveunet_input: Literal["waveform", "hifi", "both"] = "both",
+    ):
+        super().__init__(
+            hifi_resblock=hifi_resblock,
+            hifi_upsample_rates=hifi_upsample_rates,
+            hifi_upsample_kernel_sizes=hifi_upsample_kernel_sizes,
+            hifi_upsample_initial_channel=hifi_upsample_initial_channel,
+            hifi_resblock_kernel_sizes=hifi_resblock_kernel_sizes,
+            hifi_resblock_dilation_sizes=hifi_resblock_dilation_sizes,
+            hifi_input_channels=hifi_input_channels,
+            hifi_conv_pre_kernel_size=hifi_conv_pre_kernel_size,
+
+            upsample_init_channels=upsample_init_channels,
+            upsample_block_rates=upsample_block_rates,
+            upsample_block_kernel_sizes=upsample_block_kernel_sizes,
+            kernel_sizes_mrf=kernel_sizes_mrf,
+            dilations_mrf=dilations_mrf,
+
+            use_spectralunet=use_spectralunet,
+            spectralunet_block_widths=spectralunet_block_widths,
+            spectralunet_block_depth=spectralunet_block_depth,
+            spectralunet_positional_encoding=spectralunet_positional_encoding,
+
+            use_waveunet=use_waveunet,
+            waveunet_block_widths=waveunet_block_widths,
+            waveunet_block_depth=waveunet_block_depth,
+
+            use_spectralmasknet=use_spectralmasknet,
+            spectralmasknet_block_widths=spectralmasknet_block_widths,
+            spectralmasknet_block_depth=spectralmasknet_block_depth,
+
+            norm_type=norm_type,
+            use_skip_connect=use_skip_connect,
+            waveunet_before_spectralmasknet=waveunet_before_spectralmasknet,
+        )
+
+        self.waveunet_input = waveunet_input
+
+        self.waveunet_conv_pre = None
+        if self.waveunet_input == "waveform":
+            self.waveunet_conv_pre = weight_norm(
+                nn.Conv1d(
+                    1, self.hifi.out_channels, 1
+                )
+            )
+        elif self.waveunet_input == "both":
+            self.waveunet_conv_pre = weight_norm(
+                nn.Conv1d(
+                    1 + self.hifi.out_channels, self.hifi.out_channels, 1
+                )
+            )
+        
+    @staticmethod
+    def get_melspec(x):
+        shape = x.shape
+        x = x.view(shape[0] * shape[1], shape[2])
+        x = mel_spectrogram(x, 1024, 80, 16000, 256, 1024, 0, 8000)
+        x = x.view(shape[0], -1, x.shape[-1])
+        return x
+    
+
+    @staticmethod
+    def get_stft(x):
+        shape = x.shape
+        x = x.view(shape[0] * shape[1], shape[2])
+        x = stft(x, 1024, 80, 2000, 256, 1024, 0, 2000)
+        x = x.view(shape[0], -1, x.shape[-1])
+        return x
+    
+    
+    
+    def apply_waveunet_a2a(self, x, x_reference):
+        if self.waveunet_input == "waveform":
+            x_a = self.waveunet_conv_pre(x_reference)
+        elif self.waveunet_input == "both":
+            x_a = torch.cat([x, x_reference], 1)
+            x_a = self.waveunet_conv_pre(x_a)
+        elif self.waveunet_input == "hifi":
+            x_a = x
+        else:
+            raise ValueError
+        x = self.waveunet(x_a)
+        if self.use_skip_connect:
+            x += self.waveunet_skip_connect(x_a)
+        return x
+
+    def forward(self, x, initial_sr, target_sr):
+        initial_x = x.clone()
+        batch_size = x.shape[0]
+
+        current_size = initial_x.shape[-1]
+        target_size = (target_sr // initial_sr) * current_size
+        closest_size = ((current_size + 1023) // 1024) * 1024
+        pad_size =  closest_size - current_size
+        padded_x = torch.nn.functional.pad(initial_x, (0, pad_size))
+        resampled_list = []
+        for i in range(batch_size):
+            x_single = padded_x[i].cpu().numpy()
+            x_resampled = librosa.resample(
+                x_single, orig_sr=initial_sr, target_sr=target_sr, res_type="polyphase"
+            )
+            target_length = x_single.shape[-1] * (target_sr // initial_sr)
+            if len(x_resampled) > target_length:
+                x_resampled = x_resampled[:target_length]
+            
+            resampled_list.append(x_resampled)
+        
+        x_reference = np.stack(resampled_list)
+        x_reference = torch.tensor(x_reference, dtype=padded_x.dtype).to(x.device)
+
+        x = self.get_stft(padded_x)
+        x = torch.abs(x)
+
+        x = self.apply_spectralunet(x)
+        x = self.upsampling_block(x)
+        x = self.hifi(x)
+        
+        if self.use_waveunet and self.waveunet_before_spectralmasknet:
+            x = self.apply_waveunet_a2a(x, x_reference)
+        if self.use_spectralmasknet:
+            x = self.apply_spectralmasknet(x)
+        if self.use_waveunet and not self.waveunet_before_spectralmasknet:
+            x = self.apply_waveunet_a2a(x, x_reference)
         x = self.conv_post(x)
         x = torch.tanh(x)
 

@@ -1,0 +1,13 @@
+defaults:
+  - model: model
+  - metrics: metrics
+  - datasets: test_dataset
+  - dataloader: test_loader
+  - _self_
+inferencer:
+  device_tensors: ["wav_lr", "wav_hr", "melspec_lr", "melspec_hr"]
+  device: auto
+  save_path: "inference_dir"
+  seed: 1
+  from_pretrained: "/Users/polinakadeyshvili/AMI/4_course/diplom/hifi++_dla/saved_dir/nw_block/model_best.pth"
+  text_from_console: null

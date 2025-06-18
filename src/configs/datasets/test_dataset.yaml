@@ -1,0 +1,11 @@
+test:
+  _target_: src.datasets.VCTKDataset
+  dataset_split_file: "src/VCTK_split/test.txt"
+  vctk_wavs_dir_lr: /Users/polinakadeyshvili/AMI/4_course/diplom/hifi++_dla/4khz
+  vctk_wavs_dir_hr: /Users/polinakadeyshvili/AMI/4_course/diplom/hifi++_dla/16khz
+  initial_sr: 4000
+  target_sr: 16000
+  segment_size: 32768
+  device: ${inferencer.device}
+  split: True
+  mode: 'test'

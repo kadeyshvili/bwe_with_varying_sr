@@ -1,14 +1,10 @@
-import math
 from typing import Literal
-
-import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.nn.utils import weight_norm, spectral_norm
-from librosa.filters import mel as librosa_mel_fn
-from typing import Literal, List
-from math import sqrt, log
+from torch.nn.utils import  spectral_norm
+from torch.nn.utils.parametrizations import weight_norm
+from typing import Literal
 
 
 

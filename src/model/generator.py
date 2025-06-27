@@ -2,7 +2,8 @@ from typing import Literal
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.nn.utils import weight_norm, spectral_norm
+from torch.nn.utils import  spectral_norm
+from torch.nn.utils.parametrizations import weight_norm
 from librosa.filters import mel as librosa_mel_fn
 import numpy as np
 import src.utils.upsampling_utils as upsampling_utils
@@ -24,6 +25,10 @@ def spectral_normalize_torch(magnitudes):
 def stft(y, n_fft, num_mels, sampling_rate, hop_size, win_size, fmin, fmax, center=False,):
     if isinstance(y, np.ndarray):
         y = torch.from_numpy(y).unsqueeze(0)
+    if fmin is None:
+        fmin=0.0
+    if fmax is None:
+        fmax = float(sampling_rate) / 2
 
     global mel_basis, hann_window
     if fmax not in mel_basis:
@@ -368,21 +373,14 @@ class A2AHiFiPlusGenerator(HiFiPlusGenerator):
                     1 + self.hifi.out_channels, self.hifi.out_channels, 1
                 )
             )
-        
-    @staticmethod
-    def get_melspec(x):
-        shape = x.shape
-        x = x.view(shape[0] * shape[1], shape[2])
-        x = mel_spectrogram(x, 1024, 80, 16000, 256, 1024, 0, 8000)
-        x = x.view(shape[0], -1, x.shape[-1])
-        return x
+    
     
 
     @staticmethod
-    def get_stft(x):
+    def get_stft(x, sampling_rate):
         shape = x.shape
         x = x.view(shape[0] * shape[1], shape[2])
-        x = stft(x, 1024, 80, 2000, 256, 1024, 0, 2000)
+        x = stft(x, n_fft=1024, num_mels=80, sampling_rate=sampling_rate, hop_size=256, win_size=1024, fmin=None, fmax=None)
         x = x.view(shape[0], -1, x.shape[-1])
         return x
     
@@ -504,7 +502,7 @@ class A2AHiFiPlusGenerator(HiFiPlusGenerator):
             x_8_16 = self.nw_block2(upsampled_x, padded_reference, band8_16)
 
 
-        x = self.get_stft(x_8_16)
+        x = self.get_stft(x_8_16, sampling_rate=target_sr)
         x = torch.abs(x)
 
         x = self.apply_spectralunet(x)
@@ -613,20 +611,13 @@ class A2AHiFiPlusGeneratorWithMRF(HiFiPlusGenerator):
                 )
             )
         
-    @staticmethod
-    def get_melspec(x):
-        shape = x.shape
-        x = x.view(shape[0] * shape[1], shape[2])
-        x = mel_spectrogram(x, 1024, 80, 16000, 256, 1024, 0, 8000)
-        x = x.view(shape[0], -1, x.shape[-1])
-        return x
     
 
     @staticmethod
-    def get_stft(x):
+    def get_stft(x, sampling_rate):
         shape = x.shape
         x = x.view(shape[0] * shape[1], shape[2])
-        x = stft(x, 1024, 80, 2000, 256, 1024, 0, 2000)
+        x = stft(x, n_fft=1024, num_mels=80, sampling_rate=sampling_rate, hop_size=256, win_size=1024, fmin=None, fmax=None)
         x = x.view(shape[0], -1, x.shape[-1])
         return x
     
@@ -671,7 +662,7 @@ class A2AHiFiPlusGeneratorWithMRF(HiFiPlusGenerator):
         x_reference = np.stack(resampled_list)
         x_reference = torch.tensor(x_reference, dtype=padded_x.dtype).to(x.device)
 
-        x = self.get_stft(padded_x)
+        x = self.get_stft(padded_x, sampling_rate=target_sr)
         x = torch.abs(x)
 
         x = self.apply_spectralunet(x)

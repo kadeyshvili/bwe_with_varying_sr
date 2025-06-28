@@ -10,7 +10,7 @@ from pesq import pesq
 from scipy.linalg import toeplitz
 
 
-def composite_eval(ref_wav, deg_wav):
+def composite_eval(ref_wav, deg_wav, target_sr):
     # returns [sig, bak, ovl]
     alpha = 0.95
     len_ = min(ref_wav.shape[0], deg_wav.shape[0])
@@ -19,19 +19,19 @@ def composite_eval(ref_wav, deg_wav):
     deg_wav = deg_wav[:len_]
 
     # Compute WSS measure
-    wss_dist_vec = wss(ref_wav, deg_wav, 16000)
+    wss_dist_vec = wss(ref_wav, deg_wav, target_sr)
     wss_dist_vec = sorted(wss_dist_vec, reverse=False)
     wss_dist = np.mean(wss_dist_vec[: int(round(len(wss_dist_vec) * alpha))])
 
     # Compute LLR measure
-    LLR_dist = llr(ref_wav, deg_wav, 16000)
+    LLR_dist = llr(ref_wav, deg_wav, target_sr)
     LLR_dist = sorted(LLR_dist, reverse=False)
     LLRs = LLR_dist
     LLR_len = round(len(LLR_dist) * alpha)
     llr_mean = np.mean(LLRs[:LLR_len])
 
     # Compute the SSNR
-    snr_mean, segsnr_mean = SSNR(ref_wav, deg_wav, 16000)
+    snr_mean, segsnr_mean = SSNR(ref_wav, deg_wav, target_sr)
     segSNR = np.mean(segsnr_mean)
 
     # Compute the PESQ

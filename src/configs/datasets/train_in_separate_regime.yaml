@@ -1,0 +1,20 @@
+train:
+  _target_: src.datasets.VCTKDatasetSeparate
+  dataset_split_file: "src/VCTK_split/training.txt"
+  wavs_dir_4khz: /Users/polinakadeyshvili/AMI/4_course/diplom/hifi++_dla/4khz
+  wavs_dir_8khz: /Users/polinakadeyshvili/AMI/4_course/diplom/hifi++_dla/8khz
+  wavs_dir_16khz:  /Users/polinakadeyshvili/AMI/4_course/diplom/hifi++_dla/16khz
+  segment_size: 4000
+  device: ${trainer.device}
+  split: True
+  mode: 'train'
+val:
+  _target_: src.datasets.VCTKDatasetSeparate
+  dataset_split_file: "src/VCTK_split/validation.txt"
+  wavs_dir_4khz: /Users/polinakadeyshvili/AMI/4_course/diplom/hifi++_dla/4khz
+  wavs_dir_8khz: /Users/polinakadeyshvili/AMI/4_course/diplom/hifi++_dla/8khz
+  wavs_dir_16khz:  /Users/polinakadeyshvili/AMI/4_course/diplom/hifi++_dla/16khz
+  segment_size: 4000
+  device: ${trainer.device}
+  split: True
+  mode: 'train'

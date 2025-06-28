@@ -1,0 +1,54 @@
+train: []
+inference:
+  - _target_: src.metrics.MOSNetSeparate
+    name: "MOS_4_8"
+    sr: 8000
+  - _target_: src.metrics.ScaleInvariantSignalToDistortionRatioSeparate
+    name: "SISDR_4_8"
+  - _target_: src.metrics.SignalToNoiseRatioSeparate
+    name: "SNR_4_8"
+  # - _target_: src.metrics.VGGDistance
+  #   name: "VGG_dist"
+  - _target_: src.metrics.LSDSeparate
+    name: "LSD_4_8"
+  - _target_: src.metrics.LSD_LF_Separate
+    name: "LSD_LF_4_8"
+  - _target_: src.metrics.LSD_HF_Separate
+    name: "LSD_HF_4_8"
+  - _target_: src.metrics.STOI_Separate
+    name: "STOI_4_8"
+  - _target_: src.metrics.PESQ_Separate
+    name: "PESQ_4_8"
+  - _target_: src.metrics.CSIG_Separate
+    name: "CSIG_4_8"
+  - _target_: src.metrics.CBAK_Separate
+    name: "CBAK_4_8"
+  - _target_: src.metrics.COVL_Separate
+    name: "COVL_4_8"
+  - _target_: src.metrics.MOSNetSeparate
+    name: "MOS_8_16"
+    sr: 16000
+  - _target_: src.metrics.ScaleInvariantSignalToDistortionRatioSeparate
+    name: "SISDR_8_16"
+  - _target_: src.metrics.SignalToNoiseRatioSeparate
+    name: "SNR_8_16"
+  # - _target_: src.metrics.VGGDistance
+  #   name: "VGG_dist"
+  - _target_: src.metrics.LSDSeparate
+    name: "LSD_8_16"
+  - _target_: src.metrics.LSD_LF_Separate
+    name: "LSD_LF_8_16"
+  - _target_: src.metrics.LSD_HF_Separate
+    name: "LSD_HF_8_16"
+  - _target_: src.metrics.STOI_Separate
+    name: "STOI_8_16"
+  - _target_: src.metrics.PESQ_Separate
+    name: "PESQ_8_16"
+  - _target_: src.metrics.CSIG_Separate
+    name: "CSIG_8_16"
+  - _target_: src.metrics.CBAK_Separate
+    name: "CBAK_8_16"
+  - _target_: src.metrics.COVL_Separate
+    name: "COVL_8_16"
+
+    

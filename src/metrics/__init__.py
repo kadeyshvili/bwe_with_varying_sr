@@ -1,1 +1,2 @@
 from src.metrics.calculate_metrics import  MOSNet, ScaleInvariantSignalToDistortionRatio, SignalToNoiseRatio, VGGDistance, LSD, STOI, PESQ, CSIG, CBAK, COVL, LSD_LF, LSD_HF
+from src.metrics.calculate_metrics_separate import  MOSNetSeparate, ScaleInvariantSignalToDistortionRatioSeparate, SignalToNoiseRatioSeparate, VGGDistanceSeparate, LSDSeparate, STOI_Separate, PESQ_Separate, CSIG_Separate, CBAK_Separate, COVL_Separate, LSD_LF_Separate, LSD_HF_Separate

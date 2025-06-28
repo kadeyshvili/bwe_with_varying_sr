@@ -56,3 +56,16 @@ class HiFiGANLoss(nn.Module):
         self.generator_loss = GeneratorLoss()
         self.melspec_loss = MelSpectrogramLoss()
         self.fm_loss = FeatureMatchingLoss()
+
+
+class HiFiGANLossSeparateTraining(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.discriminator_loss_4_8 = DiscriminatorLoss()
+        self.discriminator_loss_8_16 = DiscriminatorLoss()
+        self.generator_loss_4_8 = GeneratorLoss()
+        self.generator_loss_8_16 = GeneratorLoss()
+        self.melspec_loss_4_8 = MelSpectrogramLoss()
+        self.melspec_loss_8_16 = MelSpectrogramLoss()
+        self.fm_loss_4_8 = FeatureMatchingLoss()
+        self.fm_loss_8_16 = FeatureMatchingLoss()

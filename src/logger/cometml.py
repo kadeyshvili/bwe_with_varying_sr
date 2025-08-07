@@ -16,6 +16,7 @@ class CometMLWriter:
         logger,
         project_config,
         project_name,
+        api_key=None,
         workspace=None,
         run_id=None,
         run_name=None,
@@ -40,7 +41,7 @@ class CometMLWriter:
         try:
             import comet_ml
 
-            comet_ml.login()
+            comet_ml.login(api_key=api_key)
 
             self.run_id = run_id
 

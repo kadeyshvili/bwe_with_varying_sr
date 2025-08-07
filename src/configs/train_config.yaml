@@ -1,6 +1,6 @@
 defaults:
   - model: model
-  - writer: wandb
+  - writer: cometml
   - metrics: metrics
   - datasets: train_dataset
   - dataloader: train_loader

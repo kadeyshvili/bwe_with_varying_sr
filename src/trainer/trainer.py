@@ -142,39 +142,21 @@ class Trainer(BaseTrainer):
     def log_audio(self, wav_lr, wav_hr,  generated_wav, partition, **batch):
         init_len_lr = batch['initial_len_lr'][0]
         init_len_hr = batch['initial_len_hr'][0]
-        if partition != 'val':
-            for i in range(4):
-                self.writer.add_audio(f"initial_wav_lr_{i}", wav_lr[i][:, :init_len_lr], self.config.datasets.train.initial_sr)
-                self.writer.add_audio(f"initial_wav_hr_{i}", wav_hr[i][:, :init_len_hr], self.config.datasets.train.target_sr)
-                self.writer.add_audio(f"generated_wav_{i}", generated_wav[i][:, :init_len_hr], self.config.datasets.train.target_sr)
-        else:
-            for i in range(10):
-                self.writer.add_audio(f"initial_wav_lr_{i}", wav_lr[i][:, :init_len_lr], self.config.datasets.val.initial_sr)
-                self.writer.add_audio(f"initial_wav_hr_{i}", wav_hr[i][:, :init_len_hr], self.config.datasets.val.target_sr)
-                self.writer.add_audio(f"generated_wav_{i}", generated_wav[i][:, :init_len_hr], self.config.datasets.val.target_sr)
+        for i in range(self.config.dataloader.val.batch_size):
+            self.writer.add_audio(f"initial_wav_lr_{i}", wav_lr[i][:, :init_len_lr], self.config.datasets.val.initial_sr)
+            self.writer.add_audio(f"initial_wav_hr_{i}", wav_hr[i][:, :init_len_hr], self.config.datasets.val.target_sr)
+            self.writer.add_audio(f"generated_wav_{i}", generated_wav[i][:, :init_len_hr], self.config.datasets.val.target_sr)
 
 
     def log_spectrogram(self, melspec_lr, melspec_hr,  mel_spec_fake, partition, **batch):
-        if partition != 'val':
-            for i in range(4):
-                spectrogram_for_plot_real_lr = melspec_lr[i].detach().cpu()[:, :batch['initial_len_melspec_lr'][0]]
-                spectrogram_for_plot_real_hr = melspec_hr[i].detach().cpu()[:, :batch['initial_len_melspec_hr'][0]]
-                spectrogram_for_plot_fake = mel_spec_fake[i].detach().cpu()
-                image = plot_spectrogram(spectrogram_for_plot_real_lr)
-                self.writer.add_image(f"melspectrogram_real_lr_{i}", image)
-                image_hr = plot_spectrogram(spectrogram_for_plot_real_hr)
-                self.writer.add_image(f"melspectrogram_real_hr_{i}", image_hr)
-                image_fake = plot_spectrogram(spectrogram_for_plot_fake)
-                self.writer.add_image(f"melspectrogram_fake_{i}", image_fake)
-        else:
-            for i in range(10):
-                spectrogram_for_plot_real_lr = melspec_lr[i].detach().cpu()[:, :batch['initial_len_melspec_lr'][0]]
-                spectrogram_for_plot_real_hr = melspec_hr[i].detach().cpu()[:, :batch['initial_len_melspec_hr'][0]]
-                spectrogram_for_plot_fake = mel_spec_fake[i].detach().cpu()
-                image = plot_spectrogram(spectrogram_for_plot_real_lr)
-                self.writer.add_image(f"melspectrogram_real_lr_{i}", image)
-                image_hr = plot_spectrogram(spectrogram_for_plot_real_hr)
-                self.writer.add_image(f"melspectrogram_real_hr_{i}", image_hr)
-                image_fake = plot_spectrogram(spectrogram_for_plot_fake)
-                self.writer.add_image(f"melspectrogram_fake_{i}", image_fake)
-
+        for i in range(self.config.dataloader.val.batch_size):
+            spectrogram_for_plot_real_lr = melspec_lr[i].detach().cpu()[:, :batch['initial_len_melspec_lr'][0]]
+            spectrogram_for_plot_real_hr = melspec_hr[i].detach().cpu()[:, :batch['initial_len_melspec_hr'][0]]
+            spectrogram_for_plot_fake = mel_spec_fake[i].detach().cpu()[:, :batch['initial_len_melspec_hr'][0]]
+            image = plot_spectrogram(spectrogram_for_plot_real_lr)
+            self.writer.add_image(f"melspectrogram_real_lr_{i}", image)
+            image_hr = plot_spectrogram(spectrogram_for_plot_real_hr)
+            self.writer.add_image(f"melspectrogram_real_hr_{i}", image_hr)
+            image_fake = plot_spectrogram(spectrogram_for_plot_fake)
+            self.writer.add_image(f"melspectrogram_fake_{i}", image_fake)
+        

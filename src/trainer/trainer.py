@@ -47,7 +47,8 @@ class Trainer(BaseTrainer):
         if isinstance(model_instance, HiFiGANWithMRF):
             wav_fake = self.model.generator(initial_wav, initial_sr, target_sr)
         else:
-            wav_fake = self.model.generator(initial_wav, initial_sr, target_sr, **batch)
+            wav_fake, specs = self.model.generator(initial_wav, initial_sr, target_sr, **batch)
+            batch['intermediate_spectrograms'] = specs
  
         if target_wav.shape != wav_fake.shape:
             wav_fake = torch.stack([F.pad(wav, (0, target_wav.shape[2] - wav_fake.shape[2]), value=0) for wav in wav_fake])
@@ -133,10 +134,12 @@ class Trainer(BaseTrainer):
         if mode == "train": 
             self.log_spectrogram(partition='train',**batch)
             self.log_audio(partition='train', **batch)
+            self.log_intermediate_spectrograms(partition='train', **batch)
 
         else:
             self.log_spectrogram(partition='val', **batch)
             self.log_audio(partition='val',**batch)
+            self.log_intermediate_spectrograms(partition='val', **batch)
 
 
     def log_audio(self, wav_lr, wav_hr,  generated_wav, partition, **batch):
@@ -159,4 +162,28 @@ class Trainer(BaseTrainer):
             self.writer.add_image(f"melspectrogram_real_hr_{i}", image_hr)
             image_fake = plot_spectrogram(spectrogram_for_plot_fake)
             self.writer.add_image(f"melspectrogram_fake_{i}", image_fake)
+
+    def log_intermediate_spectrograms(self, partition,intermediate_spectrograms,  **batch):
         
+        actual_batch_size = min(self.config.dataloader.val.batch_size, len(batch['melspec_lr']))
+        
+        for spec_name, spec_tensor in intermediate_spectrograms.items():
+            for i in range(min(actual_batch_size, spec_tensor.shape[0])):
+                if spec_tensor.dtype == torch.complex64 or spec_tensor.dtype == torch.complex128:
+                    spec_to_plot = torch.abs(spec_tensor[i]).detach().cpu()
+                else:
+                    spec_to_plot = spec_tensor[i].detach().cpu()
+                
+                if 'initial_len_melspec_hr' in batch and spec_to_plot.dim() > 1:
+                    spec_to_plot = spec_to_plot[:, :batch['initial_len_melspec_hr'][0]]
+                
+                if spec_to_plot.dim() == 1:
+                    spec_to_plot = spec_to_plot.unsqueeze(0)
+                
+                try:
+                    image = plot_spectrogram(spec_to_plot)
+                    self.writer.add_image(f"{partition}/intermediate_{spec_name}_sample_{i}", image)
+                except Exception as e:
+                    print(f"Ошибка при логировании спектрограммы {spec_name}: {e}")
+                    print(f"Shape: {spec_to_plot.shape}, dtype: {spec_to_plot.dtype}")
+            

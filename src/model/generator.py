@@ -502,22 +502,59 @@ class A2AHiFiPlusGenerator(HiFiPlusGenerator):
             x_8_16 = self.nw_block2(upsampled_x, padded_reference, band8_16)
 
 
+        spectrograms = {}
+
         x = self.get_stft(x_8_16, sampling_rate=target_sr)
+        before_spec_u_net = x.detach().clone()
+        spectrograms['before_spec_u_net'] = before_spec_u_net
         x = torch.abs(x)
+       
 
         x = self.apply_spectralunet(x)
-        x = self.hifi(x)
+        spectrograms['after_spec_unet'] = x.detach().clone()
+
+        x = self.hifi.conv_pre(x)
+
+        for i in range(self.hifi.num_upsamples):
+            x = F.leaky_relu(x, 0.1)
+            x = self.hifi.ups[i](x)
+            
+            xs = None
+            for j in range(self.hifi.num_kernels):
+                if xs is None:
+                    xs = self.hifi.resblocks[i * self.hifi.num_kernels + j](x)
+                else:
+                    xs += self.hifi.resblocks[i * self.hifi.num_kernels + j](x)
+            x = xs / self.hifi.num_kernels
+            
+            temp_conv_post = nn.Conv1d(x.shape[1], 1, 7, 1, padding=3).to(x.device)
+            temp_audio = torch.tanh(temp_conv_post(x))
+            temp_spec = self.get_stft(temp_audio, sampling_rate=target_sr)
+            spectrograms[f'hifi_after_resblock_{i}'] = temp_spec.detach().clone()
         
-        if self.use_waveunet and self.waveunet_before_spectralmasknet:
-            x = self.apply_waveunet_a2a(x, padded_reference)
-        if self.use_spectralmasknet:
-            x = self.apply_spectralmasknet(x)
+        x = F.leaky_relu(x)
+    
+        temp_conv_post = nn.Conv1d(x.shape[1], 1, 7, 1, padding=3).to(x.device)
+        temp_audio = torch.tanh(temp_conv_post(x))
+        temp_spec = self.get_stft(temp_audio, sampling_rate=target_sr)
+        spectrograms['hifi_final_leaky_relu'] = temp_spec.detach().clone()
+
         if self.use_waveunet and not self.waveunet_before_spectralmasknet:
             x = self.apply_waveunet_a2a(x, padded_reference)
+        
+
+            temp_conv_post = nn.Conv1d(x.shape[1], 1, 7, 1, padding=3).to(x.device)
+            temp_audio =torch.tanh(temp_conv_post(x))
+            temp_spec = self.get_stft(temp_audio, sampling_rate=target_sr)
+            spectrograms['after_waveunet_2'] = temp_spec.detach().clone()
+
         x = self.conv_post(x)
         x = torch.tanh(x)
 
-        return x[..., :target_size]
+
+        final_spec = self.get_stft(x, sampling_rate=target_sr)
+        spectrograms['final_spec_after_forward'] = final_spec.detach().clone()
+        return x[..., :target_size], spectrograms
     
 
 class A2AHiFiPlusGeneratorWithMRF(HiFiPlusGenerator):

@@ -706,7 +706,7 @@ class HiFiUpsampling(torch.nn.Module):
         self.ups.apply(init_weights)
         return ch
 
-    def forward(self, x):
+    def forward(self, x, spectrograms):
         x = self.conv_pre(x)
         for i in range(self.num_upsamples):
             x = F.leaky_relu(x, LRELU_SLOPE)
@@ -718,6 +718,7 @@ class HiFiUpsampling(torch.nn.Module):
                 else:
                     xs += self.resblocks[i * self.num_kernels + j](x)
             x = xs / self.num_kernels
+            spectrograms[f'after_resblock_{i}'] = x.detach().clone()
         x = F.leaky_relu(x)
         return x
 

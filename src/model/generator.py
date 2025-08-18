@@ -512,32 +512,8 @@ class A2AHiFiPlusGenerator(HiFiPlusGenerator):
 
         x = self.apply_spectralunet(x)
         spectrograms['after_spec_unet'] = x.detach().clone()
+        x = self.hifi(x, spectrograms)
 
-        x = self.hifi.conv_pre(x)
-
-        for i in range(self.hifi.num_upsamples):
-            x = F.leaky_relu(x, 0.1)
-            x = self.hifi.ups[i](x)
-            
-            xs = None
-            for j in range(self.hifi.num_kernels):
-                if xs is None:
-                    xs = self.hifi.resblocks[i * self.hifi.num_kernels + j](x)
-                else:
-                    xs += self.hifi.resblocks[i * self.hifi.num_kernels + j](x)
-            x = xs / self.hifi.num_kernels
-            
-            temp_conv_post = nn.Conv1d(x.shape[1], 1, 7, 1, padding=3).to(x.device)
-            temp_audio = torch.tanh(temp_conv_post(x))
-            temp_spec = self.get_stft(temp_audio, sampling_rate=target_sr)
-            spectrograms[f'hifi_after_resblock_{i}'] = temp_spec.detach().clone()
-        
-        x = F.leaky_relu(x)
-    
-        temp_conv_post = nn.Conv1d(x.shape[1], 1, 7, 1, padding=3).to(x.device)
-        temp_audio = torch.tanh(temp_conv_post(x))
-        temp_spec = self.get_stft(temp_audio, sampling_rate=target_sr)
-        spectrograms['hifi_final_leaky_relu'] = temp_spec.detach().clone()
 
         if self.use_waveunet and not self.waveunet_before_spectralmasknet:
             x = self.apply_waveunet_a2a(x, padded_reference)

@@ -506,7 +506,9 @@ class A2AHiFiPlusGenerator(HiFiPlusGenerator):
         x = torch.abs(x)
 
         x = self.apply_spectralunet(x)
-        x = self.hifi(x)
+        conditional_part = self.get_stft(padded_reference, sampling_rate=target_sr)
+        print(conditional_part.shape)
+        x = self.hifi(x, conditional_part)
         
         if self.use_waveunet and self.waveunet_before_spectralmasknet:
             x = self.apply_waveunet_a2a(x, padded_reference)

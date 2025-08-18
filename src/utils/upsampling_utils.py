@@ -25,6 +25,7 @@ class ResBlock1(torch.nn.Module):
     def __init__(
         self,
         channels,
+        conditional_channels,
         kernel_size=3,
         dilation=(1, 3, 5),
         norm_type: Literal["weight", "spectral"] = "weight"
@@ -102,11 +103,24 @@ class ResBlock1(torch.nn.Module):
             ]
         )
         self.convs2.apply(init_weights)
+        self.conditional_conv = nn.ModuleList([
+            weight_norm(Conv1d(conditional_channels, channels, 1, 1, dilation=1,
+                               padding=get_padding(1, 1))),
+            weight_norm(Conv1d(conditional_channels, channels, 1, 1, dilation=1,
+                               padding=get_padding(1, 1))),
+            weight_norm(Conv1d(conditional_channels, channels, 1, 1, dilation=1,
+                               padding=get_padding(1, 1)))
+        ])
+        self.conditional_conv.apply(init_weights)
 
-    def forward(self, x):
-        for c1, c2 in zip(self.convs1, self.convs2):
+
+    def forward(self, x, condition):
+        for c1, c2, con in zip(self.convs1, self.convs2, self.conditional_conv):
             xt = F.leaky_relu(x, LRELU_SLOPE)
             xt = c1(xt)
+            xt = F.leaky_relu(xt, LRELU_SLOPE)
+            condition_proj = con(condition)
+            xt = xt + condition_proj
             xt = F.leaky_relu(xt, LRELU_SLOPE)
             xt = c2(xt)
             x = xt + x
@@ -630,6 +644,7 @@ class HiFiUpsampling(torch.nn.Module):
             resblock_dilation_sizes=((1, 3, 5), (1, 3, 5), (1, 3, 5)),
             conv_pre_kernel_size=1,
             input_channels=513,
+            conditional_channels=513,
             norm_type: Literal["weight", "spectral"] = "weight",
     ):
         super().__init__()
@@ -653,6 +668,7 @@ class HiFiUpsampling(torch.nn.Module):
             self.upsample_rates,
             self.upsample_kernel_sizes,
             upsample_initial_channel,
+            conditional_channels,
             resblock_kernel_sizes,
             resblock_dilation_sizes,
         )
@@ -672,6 +688,7 @@ class HiFiUpsampling(torch.nn.Module):
         upsample_rates,
         upsample_kernel_sizes,
         upsample_initial_channel,
+        conditional_channels,
         resblock_kernel_sizes,
         resblock_dilation_sizes,
     ):
@@ -680,6 +697,8 @@ class HiFiUpsampling(torch.nn.Module):
         )
 
         self.ups = nn.ModuleList()
+        self.cond_ups = nn.ModuleList()
+
         for i, (u, k) in enumerate(zip(upsample_rates, upsample_kernel_sizes)):
             self.ups.append(
                 self.norm(
@@ -692,6 +711,17 @@ class HiFiUpsampling(torch.nn.Module):
                     )
                 )
             )
+            self.cond_ups.append(
+                nn.ConvTranspose1d(
+                    conditional_channels,
+                    conditional_channels,
+                    k,
+                    u,
+                    padding=(k - u) // 2,
+                )
+            )
+
+        
 
         ch = None
         self.resblocks = nn.ModuleList()
@@ -701,22 +731,24 @@ class HiFiUpsampling(torch.nn.Module):
                 zip(resblock_kernel_sizes, resblock_dilation_sizes)
             ):
                 self.resblocks.append(
-                    resblock(ch, k, d, norm_type=self.norm_type)
+                    resblock(ch, conditional_channels, k, d, norm_type=self.norm_type)
                 )
         self.ups.apply(init_weights)
         return ch
 
-    def forward(self, x):
+    def forward(self, x, condition):
         x = self.conv_pre(x)
         for i in range(self.num_upsamples):
             x = F.leaky_relu(x, LRELU_SLOPE)
             x = self.ups[i](x)
+            condition = F.leaky_relu(condition, LRELU_SLOPE)
+            condition = self.cond_ups[i](condition)
             xs = None
             for j in range(self.num_kernels):
                 if xs is None:
-                    xs = self.resblocks[i * self.num_kernels + j](x)
+                    xs = self.resblocks[i * self.num_kernels + j](x, condition)
                 else:
-                    xs += self.resblocks[i * self.num_kernels + j](x)
+                    xs += self.resblocks[i * self.num_kernels + j](x, condition)
             x = xs / self.num_kernels
         x = F.leaky_relu(x)
         return x

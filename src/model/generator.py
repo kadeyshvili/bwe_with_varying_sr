@@ -384,8 +384,64 @@ class A2AHiFiPlusGenerator(HiFiPlusGenerator):
         x = x.view(shape[0], -1, x.shape[-1])
         return x
     
+
+    @staticmethod
+    def get_stft_for_hifi_stage(reference_audio, target_sr, stage_index, target_time_size):
+        n_fft = 1024
+        win_size = 1024
+        audio_length = reference_audio.shape[-1]
+        
+        hop_size = max((audio_length - win_size) // (target_time_size - 1), 1)
+        
+        best_hop_size = hop_size
+        best_diff = float('inf')
+        
+        for test_hop in range(max(1, hop_size - 5), hop_size + 6):
+            expected_frames = (audio_length - win_size) // test_hop + 1
+            diff = abs(expected_frames - target_time_size)
+            if diff < best_diff:
+                best_diff = diff
+                best_hop_size = test_hop
+        
+        shape = reference_audio.shape
+        reference_flat = reference_audio.view(shape[0] * shape[1], shape[2])
+        spec = stft(reference_flat, 
+                n_fft=n_fft, 
+                num_mels=80,
+                sampling_rate=target_sr, 
+                hop_size=best_hop_size, 
+                win_size=win_size, 
+                fmin=None, 
+                fmax=None)
+        spec = spec.view(shape[0], -1, spec.shape[-1])
+        spec = torch.abs(spec)
+        
+        if spec.shape[-1] != target_time_size:
+            spec = F.interpolate(spec, size=target_time_size, mode='linear', align_corners=False)
+        
+        return spec    
     
-    
+
+    def apply_hifi_with_reference(self, x, reference_audio, target_sr):
+        x = self.hifi.conv_pre(x)
+        
+        for i in range(self.hifi.num_upsamples):
+            x = F.leaky_relu(x, upsampling_utils.LRELU_SLOPE)
+            x = self.hifi.ups[i](x)
+            condition = self.get_stft_for_hifi_stage(reference_audio, target_sr, i, x.shape[-1])
+            condition = F.leaky_relu(condition, upsampling_utils.LRELU_SLOPE)
+
+            xs = None
+            for j in range(self.hifi.num_kernels):
+                if xs is None:
+                    xs = self.hifi.resblocks[i * self.hifi.num_kernels + j](x, condition)
+                else:
+                    xs += self.hifi.resblocks[i * self.hifi.num_kernels + j](x, condition)
+            x = xs / self.hifi.num_kernels
+            
+        x = F.leaky_relu(x, upsampling_utils.LRELU_SLOPE)
+        return x
+
     def apply_waveunet_a2a(self, x, x_reference):
         if self.waveunet_input == "waveform":
             x_a = self.waveunet_conv_pre(x_reference)
@@ -506,8 +562,7 @@ class A2AHiFiPlusGenerator(HiFiPlusGenerator):
         x = torch.abs(x)
 
         x = self.apply_spectralunet(x)
-        conditional_part = self.get_stft(padded_reference, sampling_rate=target_sr)
-        x = self.hifi(x, conditional_part)
+        x = self.apply_hifi_with_reference(x, padded_reference, target_sr)
         
         if self.use_waveunet and self.waveunet_before_spectralmasknet:
             x = self.apply_waveunet_a2a(x, padded_reference)

@@ -359,6 +359,13 @@ class A2AHiFiPlusGenerator(HiFiPlusGenerator):
         )
 
         self.waveunet_input = waveunet_input
+        self.conv = nn.Conv1d(
+            in_channels=513, 
+            out_channels=128, 
+            kernel_size=1,
+            stride=1,
+            padding=0
+        )
 
         self.waveunet_conv_pre = None
         if self.waveunet_input == "waveform":
@@ -504,8 +511,7 @@ class A2AHiFiPlusGenerator(HiFiPlusGenerator):
 
         x = self.get_stft(x_8_16, sampling_rate=target_sr)
         x = torch.abs(x)
-
-        x = self.apply_spectralunet(x)
+        x = self.conv(x)
         x = self.hifi(x)
         
         if self.use_waveunet and self.waveunet_before_spectralmasknet:

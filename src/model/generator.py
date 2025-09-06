@@ -452,7 +452,6 @@ class A2AHiFiPlusGenerator(HiFiPlusGenerator):
         x_half_resampled = np.stack(resampled_once)
         x_half_resampled = torch.tensor(x_half_resampled, dtype=padded_x.dtype).to(x.device)
 
-        upsampled_x = self.upsampling_block1(padded_x)
 
 
         if initial_sr==4000 and target_sr==16000:
@@ -464,11 +463,10 @@ class A2AHiFiPlusGenerator(HiFiPlusGenerator):
             band4_8 = torch.zeros(fft_size, dtype=torch.float)
             band4_8[:int(hi * fft_size)] = 1
             band4_8 = band4_8.unsqueeze(0).unsqueeze(0) 
-            band4_8 = band4_8.repeat(batch_size, 2, 1).to(upsampled_x.device)
-            x_4_8 = self.nw_block1(upsampled_x, x_half_resampled, band4_8)
+            band4_8 = band4_8.repeat(batch_size, 2, 1).to(x_half_resampled.device)
+            x_4_8 = self.nw_block1(x_half_resampled, x_half_resampled, band4_8)
 
 
-            upsampled_x_4 = self.upsampling_block2(x_4_8)
             highcut = initial_sr // 2 * 2
             nyq = 0.5 * target_sr
             hi = highcut / nyq
@@ -476,8 +474,8 @@ class A2AHiFiPlusGenerator(HiFiPlusGenerator):
             band8_16 = torch.zeros(fft_size, dtype=torch.float)
             band8_16[:int(hi * fft_size)] = 1
             band8_16 = band8_16.unsqueeze(0).unsqueeze(0) 
-            band8_16 = band8_16.repeat(batch_size, 2, 1).to(upsampled_x.device)
-            x_8_16 = self.nw_block2(upsampled_x_4, padded_reference, band8_16)
+            band8_16 = band8_16.repeat(batch_size, 2, 1).to(padded_reference.device)
+            x_8_16 = self.nw_block2(padded_reference, padded_reference, band8_16)
 
         elif initial_sr==4000 and target_sr==8000:
             highcut = initial_sr // 2
@@ -487,8 +485,8 @@ class A2AHiFiPlusGenerator(HiFiPlusGenerator):
             band4_8 = torch.zeros(fft_size, dtype=torch.float)
             band4_8[:int(hi * fft_size)] = 1
             band4_8 = band4_8.unsqueeze(0).unsqueeze(0) 
-            band4_8 = band4_8.repeat(batch_size, 2, 1).to(upsampled_x.device)
-            x_8_16 = self.nw_block1(upsampled_x, padded_reference, band4_8)
+            band4_8 = band4_8.repeat(batch_size, 2, 1).to(padded_reference.device)
+            x_8_16 = self.nw_block1(padded_reference, padded_reference, band4_8)
 
         elif initial_sr==8000 and target_sr==16000:
             highcut = initial_sr // 2 * 2
@@ -498,8 +496,8 @@ class A2AHiFiPlusGenerator(HiFiPlusGenerator):
             band8_16 = torch.zeros(fft_size, dtype=torch.float)
             band8_16[:int(hi * fft_size)] = 1
             band8_16 = band8_16.unsqueeze(0).unsqueeze(0) 
-            band8_16 = band8_16.repeat(batch_size, 2, 1).to(upsampled_x.device)
-            x_8_16 = self.nw_block2(upsampled_x, padded_reference, band8_16)
+            band8_16 = band8_16.repeat(batch_size, 2, 1).to(padded_reference.device)
+            x_8_16 = self.nw_block2(padded_reference, padded_reference, band8_16)
 
 
         x = self.get_stft(x_8_16, sampling_rate=target_sr)

@@ -11,6 +11,7 @@ from src.utils.io_utils import ROOT_PATH
 from src.model.melspec import  MelSpectrogram
 import pandas as pd
 import numpy as np
+from hydra.utils import instantiate
 
 
 class BaseTrainer:
@@ -481,16 +482,12 @@ class BaseTrainer:
         Resume from a saved checkpoint (in case of server crash, etc.).
         The function loads state dicts for everything, including model,
         optimizers, etc.
-
-        Notice that the checkpoint should be located in the current experiment
-        saved directory (where all checkpoints are saved in '_save_checkpoint').
-
-        Args:
-            resume_path (str): Path to the checkpoint to be resumed.
         """
+
         resume_path = str(resume_path)
         self.logger.info(f"Loading checkpoint: {resume_path} ...")
-        checkpoint = torch.load(resume_path, self.device, weights_only=False)
+        checkpoint = torch.load(resume_path, map_location=self.device, weights_only=False)
+
         self.start_epoch = checkpoint["epoch"] + 1
         self.mnt_best = checkpoint["monitor_best"]
 
@@ -499,28 +496,45 @@ class BaseTrainer:
                 "Warning: Architecture configuration given in the config file is different from that "
                 "of the checkpoint. This may yield an exception when state_dict is loaded."
             )
-        self.model.load_state_dict(checkpoint["state_dict"])
+        self.model.load_state_dict(checkpoint["state_dict"], strict=False)
 
-        if (
-            checkpoint["config"]["gen_optimizer"] != self.config["gen_optimizer"]
-            or checkpoint["config"]["disc_optimizer"] != self.config["disc_optimizer"]
-            or checkpoint["config"]["gen_lr_scheduler"] != self.config["gen_lr_scheduler"]
-            or checkpoint["config"]["disc_lr_scheduler"] != self.config["disc_lr_scheduler"]
-        ):
-            self.logger.warning(
-                "Warning: Optimizer or lr_scheduler given in the config file is different "
-                "from that of the checkpoint. Optimizer and scheduler parameters "
-                "are not resumed."
-            )
-        else:
-            self.gen_optimizer.load_state_dict(checkpoint["gen_optimizer"])
-            self.disc_optimizer.load_state_dict(checkpoint["disc_optimizer"])
-            self.gen_lr_scheduler.load_state_dict(checkpoint["gen_lr_scheduler"])
-            self.disc_lr_scheduler.load_state_dict(checkpoint["disc_lr_scheduler"])
+        for name, param in self.model.generator.named_parameters():
+            if "waveunet" in name:
+                param.requires_grad = True
+            else:
+                param.requires_grad = False
 
-        self.logger.info(
-            f"Checkpoint loaded. Resume training from epoch {self.start_epoch}"
+        trainable_params_gen = list(
+            filter(lambda p: p.requires_grad, self.model.generator.parameters())
         )
+        trainable_params_disc = list(
+            filter(lambda p: p.requires_grad, self.model.mpd.parameters())
+        ) + list(
+            filter(lambda p: p.requires_grad, self.model.msd.parameters())
+        )
+
+        self.gen_optimizer = instantiate(self.config["gen_optimizer"], params=trainable_params_gen)
+        self.disc_optimizer = instantiate(self.config["disc_optimizer"], params=trainable_params_disc)
+
+        self.gen_lr_scheduler = instantiate(self.config["gen_lr_scheduler"], optimizer=self.gen_optimizer)
+        self.disc_lr_scheduler = instantiate(self.config["disc_lr_scheduler"], optimizer=self.disc_optimizer)
+
+        self.logger.info(f"Checkpoint loaded. Resume training from epoch {self.start_epoch}")
+
+        def count_params(named_params):
+            frozen, trainable = [], []
+            for n, p in named_params:
+                (trainable if p.requires_grad else frozen).append(n)
+            return frozen, trainable
+
+        gen_frozen, gen_trainable = count_params(self.model.generator.named_parameters())
+        mpd_frozen, mpd_trainable = count_params(self.model.mpd.named_parameters())
+        msd_frozen, msd_trainable = count_params(self.model.msd.named_parameters())
+
+        self.logger.info(f"[Generator] frozen={len(gen_frozen)}, trainable={len(gen_trainable)}")
+        self.logger.info(f"    Trainable example: {gen_trainable[:10]}")
+        self.logger.info(f"[MPD] frozen={len(mpd_frozen)}, trainable={len(mpd_trainable)}")
+        self.logger.info(f"[MSD] frozen={len(msd_frozen)}, trainable={len(msd_trainable)}")
 
     def _from_pretrained(self, pretrained_path):
         """

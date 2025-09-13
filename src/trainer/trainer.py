@@ -85,12 +85,28 @@ class Trainer(BaseTrainer):
 
         target_melspec = mel_spectrogram(target_wav.squeeze(1), 1024, 80, 16000, 256, 1024, 0, 8000)
 
-        mel_spec_loss = self.criterion.melspec_loss(target_melspec, mel_spec_fake)
+
+
+        spec_real = torch.stft(
+            target_wav.squeeze(1),
+            n_fft=1024, hop_length=256, win_length=1024,
+            window=torch.hann_window(1024).to(target_wav.device),
+            return_complex=True
+        ).abs()
+
+        spec_fake = torch.stft(
+            wav_fake.squeeze(1),
+            n_fft=1024, hop_length=256, win_length=1024,
+            window=torch.hann_window(1024).to(wav_fake.device),
+            return_complex=True
+        ).abs()
+
+        spec_loss = self.criterion.spec_loss(spec_real, spec_fake)
         
         mpd_feats_gen_loss = self.criterion.fm_loss(mpd_gt_feats, mpd_fake_feats)
         msd_feats_gen_loss = self.criterion.fm_loss(msd_gt_features, msd_fake_feats)
 
-        gen_loss = mpd_gen_loss + msd_gen_loss + mel_spec_loss + mpd_feats_gen_loss + msd_feats_gen_loss
+        gen_loss = mpd_gen_loss + msd_gen_loss + spec_loss + mpd_feats_gen_loss + msd_feats_gen_loss
 
 
         if self.is_train:
@@ -104,7 +120,7 @@ class Trainer(BaseTrainer):
         batch["disc_loss"] = disc_loss
         batch["mpd_gen_loss"] = mpd_gen_loss
         batch["msd_gen_loss"] = msd_gen_loss
-        batch["mel_spec_loss"] = mel_spec_loss
+        batch["spec_loss"] = spec_loss
         batch["mpd_feats_gen_loss"] = mpd_feats_gen_loss
         batch["msd_feats_gen_loss"] = msd_feats_gen_loss
         batch["gen_loss"] = gen_loss

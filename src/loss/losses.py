@@ -40,7 +40,7 @@ class FeatureMatchingLoss(nn.Module):
         return loss * 2    
 
 
-class MelSpectrogramLoss(nn.Module):
+class SpectrogramLoss(nn.Module):
     def __init__(self):
         super().__init__()
 
@@ -54,5 +54,5 @@ class HiFiGANLoss(nn.Module):
         super().__init__()
         self.discriminator_loss = DiscriminatorLoss()
         self.generator_loss = GeneratorLoss()
-        self.melspec_loss = MelSpectrogramLoss()
+        self.spec_loss = SpectrogramLoss()
         self.fm_loss = FeatureMatchingLoss()

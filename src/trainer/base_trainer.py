@@ -386,12 +386,10 @@ class BaseTrainer:
         """
         if isinstance(parameters, torch.Tensor):
             parameters = [parameters]
-        parameters = [p for p in parameters if p.grad is not None]
-        total_norm = torch.norm(
-            torch.stack([torch.norm(p.grad.detach(), norm_type) for p in parameters]),
-            norm_type,
-        )
-        return total_norm.item()
+        grads = [p.grad.detach() for p in parameters if p.grad is not None]
+        if len(grads) == 0:
+            return torch.tensor(0.0, device=self.device)  # safe fallback
+        return torch.norm(torch.stack([torch.norm(g, norm_type) for g in grads]), norm_type)
 
     def _progress(self, batch_idx):
         """

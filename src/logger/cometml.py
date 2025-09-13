@@ -1,4 +1,5 @@
 from datetime import datetime
+import comet_ml
 
 import numpy as np
 import pandas as pd
@@ -39,40 +40,28 @@ class CometMLWriter:
                 offline, log locally.
         """
         try:
-            import comet_ml
 
             comet_ml.login(api_key=api_key)
 
             self.run_id = run_id
 
-            resume = False
-            if project_config["trainer"].get("resume_from") is not None:
-                resume = True
-
-            if resume:
-                if mode == "offline":
-                    exp_class = comet_ml.ExistingOfflineExperiment
-                else:
-                    exp_class = comet_ml.ExistingExperiment
-
-                self.exp = exp_class(experiment_key=self.run_id)
+            
+            if mode == "offline":
+                exp_class = comet_ml.OfflineExperiment
             else:
-                if mode == "offline":
-                    exp_class = comet_ml.OfflineExperiment
-                else:
-                    exp_class = comet_ml.Experiment
+                exp_class = comet_ml.Experiment
 
-                self.exp = exp_class(
-                    project_name=project_name,
-                    workspace=workspace,
-                    experiment_key=self.run_id,
-                    log_code=kwargs.get("log_code", False),
-                    log_graph=kwargs.get("log_graph", False),
-                    auto_metric_logging=kwargs.get("auto_metric_logging", False),
-                    auto_param_logging=kwargs.get("auto_param_logging", False),
-                )
-                self.exp.set_name(run_name)
-                self.exp.log_parameters(parameters=project_config)
+            self.exp = exp_class(
+                project_name=project_name,
+                workspace=workspace,
+                experiment_key=self.run_id,
+                log_code=kwargs.get("log_code", False),
+                log_graph=kwargs.get("log_graph", False),
+                auto_metric_logging=kwargs.get("auto_metric_logging", False),
+                auto_param_logging=kwargs.get("auto_param_logging", False),
+            )
+            self.exp.set_name(run_name)
+            self.exp.log_parameters(parameters=project_config)
 
             self.comel_ml = comet_ml
 

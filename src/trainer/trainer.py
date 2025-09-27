@@ -43,8 +43,7 @@ class Trainer(BaseTrainer):
         target_wav = batch['wav_hr']
         initial_sr = self.config.datasets.train.initial_sr
         target_sr = self.config.datasets.train.target_sr
-        model_instance = instantiate(self.config.model)
-        if isinstance(model_instance, HiFiGANWithMRF):
+        if isinstance(self.model, HiFiGANWithMRF):
             wav_fake = self.model.generator(initial_wav, initial_sr, target_sr)
         else:
             wav_fake = self.model.generator(initial_wav, initial_sr, target_sr, **batch)

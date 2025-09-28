@@ -10,4 +10,3 @@ inferencer:
   save_path: "inference_dir"
   seed: 1
   from_pretrained: "/Users/polinakadeyshvili/AMI/4_course/diplom/hifi++_dla/saved_dir/nw_block/model_best.pth"
-  text_from_console: null

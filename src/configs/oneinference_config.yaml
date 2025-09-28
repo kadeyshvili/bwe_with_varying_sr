@@ -1,0 +1,16 @@
+defaults:
+  - model: model
+  - metrics: metrics
+  - datasets: test_dataset
+  - dataloader: test_loader
+  - _self_
+inferencer:
+  device_tensors: ["wav_lr", "wav_hr", "melspec_lr", "melspec_hr"]
+  device: auto
+  save_path: "inference_dir"
+  seed: 1
+  from_pretrained: "/Users/polinakadeyshvili/AMI/4_course/diplom/hifi++_dla/saved_dir/nw_block/model_best.pth"
+  input_path: 'p340_005_mic2.flac'
+  original_path: 'inpVCTK60_3sec.wav'
+  dowsampled_path: 'inpVCTK60_3sec_16k.wav'
+  generated_path: 'resultVCTK60_3sec.wav'

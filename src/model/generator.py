@@ -194,13 +194,19 @@ class HiFiPlusGenerator(torch.nn.Module):
         )
         ch = self.hifi.out_channels
 
-        if self.use_spectralunet:
-            self.spectralunet = upsampling_utils.SpectralUNet(
-                block_widths=spectralunet_block_widths,
-                block_depth=spectralunet_block_depth,
-                positional_encoding=spectralunet_positional_encoding,
-                norm_type=norm_type,
-            )
+        self.spectralunet = upsampling_utils.SpectralUNet(
+            block_widths=spectralunet_block_widths,
+            block_depth=spectralunet_block_depth,
+            positional_encoding=spectralunet_positional_encoding,
+            norm_type=norm_type,
+        )
+        self.conv = nn.Conv1d(
+            in_channels=513, 
+            out_channels=128, 
+            kernel_size=1,
+            stride=1,
+            padding=0
+        )
 
         if self.use_waveunet:
             self.waveunet = upsampling_utils.MultiScaleResnet(
@@ -504,8 +510,10 @@ class A2AHiFiPlusGenerator(HiFiPlusGenerator):
 
         x = self.get_stft(x_8_16, sampling_rate=target_sr)
         x = torch.abs(x)
-
-        x = self.apply_spectralunet(x)
+        if self.use_spectralunet:
+            x = self.apply_spectralunet(x)
+        else:
+            x = self.conv(x)
         x = self.hifi(x)
         
         if self.use_waveunet and self.waveunet_before_spectralmasknet:

@@ -20,7 +20,19 @@ class HiFiGANWithMRF(nn.Module):
         trainable_parameters = sum(
             [p.numel() for p in self.parameters() if p.requires_grad]
         )
+        gen_parameters = sum(
+            [p.numel() for p in self.generator.parameters() if p.requires_grad]
+        )
+        msd_parameters = sum(
+            [p.numel() for p in self.msd.parameters() if p.requires_grad]
+        )
+        mpd_parameters = sum(
+            [p.numel() for p in self.mpd.parameters() if p.requires_grad]
+        )
         result_info = super().__str__()
         result_info = result_info + f"\nAll parameters: {all_parameters}"
         result_info = result_info + f"\nTrainable parameters: {trainable_parameters}"
+        result_info = result_info + f"\nGen: {gen_parameters}"
+        result_info = result_info + f"\nMSD: {msd_parameters}"
+        result_info = result_info + f"\nMPD: {mpd_parameters}"
         return result_info

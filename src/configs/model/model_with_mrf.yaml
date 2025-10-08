@@ -23,13 +23,8 @@ generator_config:
   waveunet_block_widths: [10, 20, 40, 80]
   waveunet_block_depth: 4
 
-  use_spectralmasknet: False
-  spectralmasknet_block_widths: [8, 12, 24, 32]
-  spectralmasknet_block_depth: 4
-
   norm_type: "weight"
   use_skip_connect: True
-  waveunet_before_spectralmasknet: True
   waveunet_input: "both"
 mpd_config: 
   periods: [2, 3, 5, 7, 11]

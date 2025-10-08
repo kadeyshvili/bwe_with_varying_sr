@@ -5,7 +5,7 @@ import torch.nn.functional as F
 from torch.nn.utils import  spectral_norm
 from torch.nn.utils.parametrizations import weight_norm
 from typing import Literal
-
+from math import sqrt
 
 
 def init_weights(m, mean=0.0, std=0.01):
@@ -594,12 +594,13 @@ class FFC(nn.Module):
 class NUWaveBlock(nn.Module):
     def __init__(self, residual_channels, bsft_channels,):
         super().__init__()
-        self.input_projection = Conv1d(2, residual_channels, 1)
-        self.ffc1 = FFC(residual_channels, 2*residual_channels, bsft_channels, kernel_size=3, ratio_gin=0.5, ratio_gout=0.5, padding=1) # STFC
-
-        self.output_projection = Conv1d(residual_channels, 2 * residual_channels, 1)
-        self.output_projectio2 = Conv1d(residual_channels, 1, 1)
-
+        self.input_projection = nn.Conv1d(2, residual_channels, 1)
+        self.ffc1 = FFC(
+            residual_channels, 2 * residual_channels, bsft_channels,
+            kernel_size=3, ratio_gin=0.5, ratio_gout=0.5, padding=1
+        )
+        self.output_projection = nn.Conv1d(residual_channels, 2 * residual_channels, 1)
+        self.output_projection2 = nn.Conv1d(residual_channels, 1, 1)
 
     def forward(self, initial_x, reference_x, band):
         initial_x = initial_x.squeeze(1)
@@ -616,8 +617,32 @@ class NUWaveBlock(nn.Module):
         y = torch.sigmoid(gate) * torch.tanh(filter)
         y = self.output_projection(y)
         residual, skip = torch.chunk(y, 2, dim=1)
-        out = self.output_projectio2(residual)
-        return out
+        out = self.output_projection2(residual)
+        return out, skip
+
+
+class NUWaveStack(nn.Module):
+    def __init__(self, residual_channels, bsft_channels, n_blocks=1):
+        super().__init__()
+        self.nwblocks = nn.ModuleList([
+            NUWaveBlock(residual_channels, bsft_channels) for _ in range(n_blocks)
+        ])
+        self.len_res = n_blocks
+        self.skip_projection = nn.Conv1d(residual_channels, residual_channels, 1)
+        self.output_projection = nn.Conv1d(residual_channels, 1, 1)
+
+    def forward(self, initial_x, reference_x, band):
+        out, skip_total = self.nwblocks[0](initial_x, reference_x, band)
+        for i in range(1, len(self.nwblocks)):
+            out, skip_connection = self.nwblocks[i](out, reference_x, band)
+            skip_total = skip_total + skip_connection
+
+        skip_total = skip_total / sqrt(self.len_res)
+        skip_total = self.skip_projection(skip_total)
+        skip_total = silu(skip_total)
+        skip_total = self.output_projection(skip_total)
+        return skip_total
+
 
 
 

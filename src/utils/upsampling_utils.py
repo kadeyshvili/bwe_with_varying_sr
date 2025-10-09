@@ -6,6 +6,8 @@ from torch.nn.utils import  spectral_norm
 from torch.nn.utils.parametrizations import weight_norm
 from typing import Literal
 from math import sqrt
+from librosa.filters import mel as librosa_mel_fn 
+import numpy as np
 
 
 def init_weights(m, mean=0.0, std=0.01):
@@ -791,3 +793,86 @@ class SpectralUNet(nn.Module):
         out_magnitude = self.post_conv_1d(out)
         return out_magnitude
     
+
+
+class SpectralUNetForHiFi(nn.Module):
+    def __init__(
+            self,
+            block_widths=(8, 16, 24, 32, 64),
+            block_depth=5,
+            positional_encoding=True,
+            norm_type: Literal["weight", "spectral"] = "weight",
+    ):
+        super().__init__()
+        self.positional_encoding = positional_encoding
+        self.norm_type = norm_type
+        norm = dict(weight=weight_norm, spectral=spectral_norm)[norm_type]
+
+        self.learnable_mel2linspec = norm(nn.Conv1d(80, 513, 1))
+
+        in_width = int(positional_encoding) + 2
+
+        # out_width could be 1 and self.post_conv_2d could be not used here,
+        # but both were left for backward compatibility
+        # with the other hypotheses we tested
+        out_width = block_widths[0]
+
+        self.net = MultiScaleResnet2d(
+            block_widths,
+            block_depth,
+            scale_factor=2,
+            in_width=in_width,
+            out_width=out_width,
+            norm_type=norm_type,
+        )
+
+        self.post_conv_2d = nn.Sequential(
+            norm(nn.Conv2d(out_width, 1, 1, padding=0)),
+        )
+
+        self.post_conv_1d = nn.Sequential(
+            norm(nn.Conv1d(513, 128, 1, 1, padding=0)),
+        )
+
+        self.mel2lin = None
+        self.calculate_mel2lin_matrix()
+
+    def calculate_mel2lin_matrix(self):
+        mel_np = librosa_mel_fn(
+            sr=16000, n_fft=1024, n_mels=80, fmin=0, fmax=8000
+        )
+        slices = [
+            (np.where(row)[0].min(), np.where(row)[0].max() + 1)
+            for row in mel_np
+        ]
+        slices = [x[0] for x in slices] + [slices[-1][1]]
+        mel2lin = np.zeros([81, 513])
+        for i, x1, x2 in zip(range(80), slices[:-1], slices[1:]):
+            mel2lin[i, x1: x2 + 1] = np.linspace(1, 0, x2 - x1 + 1)
+            mel2lin[i + 1, x1: x2 + 1] = np.linspace(0, 1, x2 - x1 + 1)
+        mel2lin = mel2lin[1:]
+        mel2lin = torch.from_numpy(mel2lin.T).float()
+        self.mel2lin = mel2lin
+
+    def mel2linspec(self, mel):
+        return torch.matmul(self.mel2lin.to(mel), mel)
+
+    def forward(self, mel):
+        linspec_approx = self.mel2linspec(mel)
+        linspec_conv_approx = self.learnable_mel2linspec(mel)
+        linspec_conv_approx = linspec_conv_approx.view(
+            mel.shape[0], 1, -1, mel.shape[2]
+        )
+        net_input = linspec_approx.view(
+            linspec_approx.shape[0], 1, -1, linspec_approx.shape[2]
+        )
+        if self.positional_encoding:
+            pos_enc = torch.linspace(0, 1, 513)[..., None].expand(
+                net_input.shape[0], 1, net_input.shape[2], net_input.shape[3]
+            )
+            net_input = torch.cat((net_input, pos_enc.to(net_input)), dim=1)
+        net_input = torch.cat((net_input, linspec_conv_approx), dim=1)
+        out = self.net(net_input)
+        out = self.post_conv_2d(out).squeeze(1)
+        out = self.post_conv_1d(out)
+        return out

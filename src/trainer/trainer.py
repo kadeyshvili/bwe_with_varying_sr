@@ -8,9 +8,7 @@ from src.metrics.tracker import MetricTracker
 from src.trainer.base_trainer import BaseTrainer
 import torch.nn.functional as F
 from src.metrics.calculate_metrics import calculate_all_metrics
-from src.model.generator import mel_spectrogram
 from src.model import HiFiGANWithMRF
-from hydra.utils import instantiate
 
 
 

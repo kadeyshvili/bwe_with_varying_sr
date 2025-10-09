@@ -8,6 +8,7 @@ from librosa.filters import mel as librosa_mel_fn
 import numpy as np
 import src.utils.upsampling_utils as upsampling_utils
 import librosa
+from src.model.melspec import MelSpectrogram
 
 
 
@@ -59,65 +60,6 @@ def stft(y, n_fft, num_mels, sampling_rate, hop_size, win_size, fmin, fmax, cent
         return_complex=True,
     )
     return torch.abs(freq_and_time)
-
-
-
-def mel_spectrogram(
-    y,
-    n_fft,
-    num_mels,
-    sampling_rate,
-    hop_size,
-    win_size,
-    fmin,
-    fmax,
-    center=False,
-    return_mel_and_spec=False,
-):
-    if isinstance(y, np.ndarray):
-        y = torch.from_numpy(y).unsqueeze(0)
-
-    global mel_basis, hann_window
-    if fmax not in mel_basis:
-        mel = librosa_mel_fn(sr=sampling_rate, n_fft=n_fft, n_mels=num_mels,
-                             fmin=fmin, fmax=fmax)
-        mel_basis[str(fmax) + "_" + str(y.device)] = (
-            torch.from_numpy(mel).float().to(y.device)
-        )
-        hann_window[str(y.device)] = torch.hann_window(win_size).to(y.device)
-
-    y = torch.nn.functional.pad(
-        y.unsqueeze(1),
-        (int((n_fft - hop_size) / 2), int((n_fft - hop_size) / 2)),
-        mode="reflect",
-    )
-    y = y.squeeze(1)
-
-    spec = torch.stft(
-        y,
-        n_fft,
-        hop_length=hop_size,
-        win_length=win_size,
-        window=hann_window[str(y.device)],
-        center=center,
-        pad_mode="reflect",
-        normalized=False,
-        onesided=True,
-        return_complex=False,
-    )
-
-    spec = torch.sqrt(spec.pow(2).sum(-1) + 1e-9)
-
-    mel = torch.matmul(mel_basis[str(fmax) + "_" + str(y.device)], spec)
-    mel = spectral_normalize_torch(mel)
-    result = mel.squeeze()
-
-    if return_mel_and_spec:
-        spec = spectral_normalize_torch(spec)
-        return result, spec
-    else:
-        return result
-
 
 def closest_power_of_two(n):
     return 1 << (n - 1).bit_length()
@@ -641,3 +583,130 @@ class A2AHiFiPlusGeneratorWithMRF(HiFiPlusGenerator):
         x = torch.tanh(x)
 
         return x[..., :target_size]
+    
+
+
+class A2AHiFiPlusPlus(HiFiPlusGenerator):
+    def __init__(
+        self,
+        hifi_resblock="1",
+        hifi_upsample_rates=(8, 8, 2, 2),
+        hifi_upsample_kernel_sizes=(16, 16, 4, 4),
+        hifi_upsample_initial_channel=128,
+        hifi_resblock_kernel_sizes=(3, 7, 11),
+        hifi_resblock_dilation_sizes=((1, 3, 5), (1, 3, 5), (1, 3, 5)),
+        hifi_input_channels=128,
+        hifi_conv_pre_kernel_size=1,
+
+        use_spectralunet=True,
+        spectralunet_block_widths=(8, 16, 24, 32, 64),
+        spectralunet_block_depth=5,
+        spectralunet_positional_encoding=True,
+
+        use_waveunet=True,
+        waveunet_block_widths=(10, 20, 40, 80),
+        waveunet_block_depth=4,
+
+
+        norm_type: Literal["weight", "spectral"] = "weight",
+        use_skip_connect=True,
+
+        waveunet_input: Literal["waveform", "hifi", "both"] = "both",
+    ):
+        super().__init__(
+            hifi_resblock=hifi_resblock,
+            hifi_upsample_rates=hifi_upsample_rates,
+            hifi_upsample_kernel_sizes=hifi_upsample_kernel_sizes,
+            hifi_upsample_initial_channel=hifi_upsample_initial_channel,
+            hifi_resblock_kernel_sizes=hifi_resblock_kernel_sizes,
+            hifi_resblock_dilation_sizes=hifi_resblock_dilation_sizes,
+            hifi_input_channels=hifi_input_channels,
+            hifi_conv_pre_kernel_size=hifi_conv_pre_kernel_size,
+
+            use_spectralunet=use_spectralunet,
+            spectralunet_block_widths=spectralunet_block_widths,
+            spectralunet_block_depth=spectralunet_block_depth,
+            spectralunet_positional_encoding=spectralunet_positional_encoding,
+
+            use_waveunet=use_waveunet,
+            waveunet_block_widths=waveunet_block_widths,
+            waveunet_block_depth=waveunet_block_depth,
+
+            norm_type=norm_type,
+            use_skip_connect=use_skip_connect,
+        )
+        self.melspec_creator=MelSpectrogram()
+        self.waveunet_input = waveunet_input
+        self.spectralunet =  upsampling_utils.SpectralUNetForHiFi(
+                block_widths=spectralunet_block_widths,
+                block_depth=spectralunet_block_depth,
+                positional_encoding=spectralunet_positional_encoding,
+                norm_type=norm_type,
+            )
+
+
+
+        self.waveunet_conv_pre = None
+        if self.waveunet_input == "waveform":
+            self.waveunet_conv_pre = weight_norm(
+                nn.Conv1d(
+                    1, self.hifi.out_channels, 1
+                )
+            )
+        elif self.waveunet_input == "both":
+            self.waveunet_conv_pre = weight_norm(
+                nn.Conv1d(
+                    1 + self.hifi.out_channels, self.hifi.out_channels, 1
+                )
+            )
+        
+    def apply_spectralunet(self, x_orig):
+        if self.use_spectralunet:
+            pad_size = (
+                closest_power_of_two(x_orig.shape[-1]) - x_orig.shape[-1]
+            )
+            x = torch.nn.functional.pad(x_orig, (0, pad_size))
+            x = self.spectralunet(x)
+            x = x[..., : x_orig.shape[-1]]
+        else:
+            x = x_orig.squeeze(1)
+        return x
+
+    def apply_waveunet_a2a(self, x, x_orig):
+        if self.waveunet_input == "waveform":
+            x_a = self.waveunet_conv_pre(x_orig)
+        elif self.waveunet_input == "both":
+            x_a = torch.cat([x, x_orig], 1)
+            x_a = self.waveunet_conv_pre(x_a)
+        elif self.waveunet_input == "hifi":
+            x_a = x
+        else:
+            raise ValueError
+        x = self.waveunet(x_a)
+        if self.use_skip_connect:
+            x += self.waveunet_skip_connect(x_a)
+        return x
+
+    def forward(self, x,  initial_sr, target_sr, **batch):
+        x_orig = x.clone()
+        batch_size = x.shape[0]
+        resampled_audio = []
+        for i in range(batch_size):
+            x_single = x_orig[i].cpu().numpy()
+            x_resampled = librosa.resample(
+                x_single, orig_sr=initial_sr, target_sr=target_sr, res_type="polyphase"
+            )
+            resampled_audio.append(x_resampled)
+
+        x_orig = np.stack(resampled_audio)
+        x_orig = torch.tensor(x_orig, dtype=x.dtype).to(x.device)
+
+        x_orig = x_orig[:, :, : x_orig.shape[2] // 1024 * 1024]
+        x = self.melspec_creator(x_orig).squeeze(1)
+        x = self.apply_spectralunet(x)
+        x = self.hifi(x)
+        if self.use_waveunet:
+            x = self.apply_waveunet_a2a(x, x_orig)
+        x = self.conv_post(x)
+        x = torch.tanh(x)
+        return x

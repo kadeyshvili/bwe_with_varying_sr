@@ -92,7 +92,7 @@ The model uses Hydra for configuration management. Key configuration parameters 
 ### How to run inference
 To evaluate a trained model:
 ```bash
-python3 inference.py -cn="inference_config" inferencer.from_pretrained="path_to_pretrained_model" datasets.test.split=True datasets.test.vctk_wavs_dir=<path_to_dir_with_wavs> dataloader.test.batch_size=4 datasets.test.dataset_split_file=<path_to_split_file/test.txt> 
+python3 inference.py -cn="inference_config" inferencer.from_pretrained="path_to_pretrained_model" datasets.test.split=True datasets.test.vctk_wavs_dir_lr=<path_to_dir_with_lr_wavs> datasets.test.vctk_wavs_dir_hr=<path_to_dir_with_hr_wavs> dataloader.test.batch_size=4 datasets.test.dataset_split_file=<path_to_split_file/test.txt> 
 ```
 
 

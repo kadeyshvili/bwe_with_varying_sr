@@ -229,6 +229,12 @@ class A2AHiFiPlusGenerator(HiFiPlusGenerator):
         upsample_block_rates=[2, 2],
         upsample_block_kernel_sizes=[4, 4], 
 
+
+        residual_channels=64,
+        bsft_channels=64,
+        nwstack1_blocks=1,
+        nwstack2_blocks=1,
+
         use_spectralunet=True,
         spectralunet_block_widths=(8, 16, 24, 32, 64),
         spectralunet_block_depth=5,
@@ -257,6 +263,11 @@ class A2AHiFiPlusGenerator(HiFiPlusGenerator):
             upsample_init_channels=upsample_init_channels,
             upsample_block_rates=upsample_block_rates,
             upsample_block_kernel_sizes=upsample_block_kernel_sizes,
+
+            residual_channels=residual_channels,
+            bsft_channels=bsft_channels,
+            nwstack1_blocks=nwstack1_blocks,
+            nwstack2_blocks=nwstack2_blocks,
 
             use_spectralunet=use_spectralunet,
             spectralunet_block_widths=spectralunet_block_widths,

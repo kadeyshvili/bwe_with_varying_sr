@@ -12,6 +12,11 @@ generator_config:
   upsample_block_rates: [2]
   upsample_block_kernel_sizes: [4]
 
+  residual_channels: 64
+  bsft_channels: 64
+  nwstack1_blocks: 1
+  nwstack2_blocks: 1
+
   use_spectralunet: True
   spectralunet_block_widths: [8, 16, 24, 32, 64]
   spectralunet_block_depth: 5

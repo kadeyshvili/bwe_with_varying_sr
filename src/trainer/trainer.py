@@ -84,6 +84,21 @@ class Trainer(BaseTrainer):
 
         batch["mel_spec_fake"] = self.create_mel_spec( batch["generated_wav"].squeeze(1))
         batch["mel_spec_hr"] = self.create_mel_spec( target_wav.squeeze(1))
+        spec_hr = torch.stft(
+            target_wav.squeeze(1),
+            n_fft=1024, hop_length=256, win_length=1024,
+            window=torch.hann_window(1024).to(target_wav.device),
+            return_complex=True
+        ).abs()
+
+        spec_fake = torch.stft(
+            wav_fake.squeeze(1),
+            n_fft=1024, hop_length=256, win_length=1024,
+            window=torch.hann_window(1024).to(wav_fake.device),
+            return_complex=True
+        ).abs()
+        batch["spec_hr"] = spec_hr
+        batch["spec_fake"] = spec_fake
         
         mpd_gen_loss, msd_gen_loss,\
         mpd_feats_gen_loss, msd_feats_gen_loss,\

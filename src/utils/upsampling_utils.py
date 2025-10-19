@@ -619,7 +619,7 @@ class NUWaveBlock(nn.Module):
         y = torch.sigmoid(gate) * torch.tanh(filter)
         y = self.output_projection(y)
         residual, skip = torch.chunk(y, 2, dim=1)
-        out = self.output_projectio2(residual)
+        out = self.output_projection2(residual)
         return out
     
     

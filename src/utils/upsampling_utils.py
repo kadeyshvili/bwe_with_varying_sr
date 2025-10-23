@@ -596,13 +596,13 @@ class FFC(nn.Module):
 class NUWaveBlock(nn.Module):
     def __init__(self, residual_channels, bsft_channels,):
         super().__init__()
-        self.input_projection = nn.Conv1d(2, residual_channels, 1)
+        self.input_projection = Conv1d(2, residual_channels, 1)
         self.ffc1 = FFC(
             residual_channels, 2 * residual_channels, bsft_channels,
             kernel_size=3, ratio_gin=0.5, ratio_gout=0.5, padding=1
         )
-        self.output_projection = nn.Conv1d(residual_channels, 2 * residual_channels, 1)
-        self.output_projection2 = nn.Conv1d(residual_channels, 1, 1)
+        self.output_projection = Conv1d(residual_channels, 2 * residual_channels, 1)
+        self.output_projection2 = Conv1d(residual_channels, 1, 1)
 
     def forward(self, initial_x, reference_x, band):
         initial_x = initial_x.squeeze(1)

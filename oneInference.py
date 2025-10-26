@@ -7,6 +7,7 @@ import librosa
 from hydra.utils import instantiate
 import logging
 from pathlib import Path
+from src.metrics.calculate_metrics import calculate_all_metrics
 
 warnings.filterwarnings("ignore", category=UserWarning)
 
@@ -41,7 +42,7 @@ def main(config):
     logger.info("Reading.....")
     audio_tensor, sr = torchaudio.load(config.inferencer.input_path)
 
-    audio_tensor = audio_tensor[0:1, :3*sr]
+    # audio_tensor = audio_tensor[0:1, :3*sr]
     logger.info("DONE!")
 
     logger.info("Resampling.....")
@@ -49,11 +50,11 @@ def main(config):
     target_sr = 16000 #!!!! HARDCODE
     resStart = 48000
 
-    inp = torch.from_numpy(librosa.resample(audio_tensor.cpu().numpy(), orig_sr=resStart, target_sr=initial_sr, res_type="polyphase"))
+    inp = torch.from_numpy(librosa.resample(audio_tensor.cpu().numpy(), orig_sr=target_sr, target_sr=initial_sr, res_type="polyphase"))
     
     torchaudio.save(str(save_path / config.inferencer.original_path), inp.detach().cpu(), sample_rate=initial_sr)
 
-    inp16 = torch.from_numpy(librosa.resample(audio_tensor.cpu().numpy(), orig_sr=resStart, target_sr=target_sr, res_type="polyphase"))
+    inp16 = torch.from_numpy(librosa.resample(audio_tensor.cpu().numpy(), orig_sr=target_sr, target_sr=target_sr, res_type="polyphase"))
 
     torchaudio.save(str(save_path / config.inferencer.dowsampled_path),inp16.detach().cpu(),sample_rate=target_sr) 
      
@@ -62,8 +63,8 @@ def main(config):
     logger.info("DONE!")
     
     logger.info("Model call.....")
-    inp = torch.concatenate([inp[0,:],inp[0,:]],dim=0).unsqueeze(0).unsqueeze(0)
-    res = model.generator(inp, initial_sr, target_sr, mode="eval")
+    # inp = torch.concatenate([inp[0,:],inp[0,:]],dim=0).unsqueeze(0).unsqueeze(0)
+    res = model.generator(inp.unsqueeze(0), initial_sr, target_sr, mode="eval")
 
 
     logger.info("DONE!")
@@ -71,6 +72,19 @@ def main(config):
     logger.info(res.squeeze([0]).shape)
     torchaudio.save(str(save_path / config.inferencer.generated_path), res.squeeze([0]).detach().cpu(), sample_rate=target_sr)
     logger.info("DONE!")
+
+
+    metrics = {"inference": []}
+    for metric_config in config.metrics.get("inference", []):
+        metrics["inference"].append(
+            instantiate(metric_config)
+        )
+
+    metrics = calculate_all_metrics(res, inp16.unsqueeze(0), metrics["inference"], initial_sr, target_sr)
+    for name, val in metrics.items():
+        print(f'{name}: {val[0]}')
+    
+
     
     
     

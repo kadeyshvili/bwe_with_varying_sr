@@ -41,3 +41,7 @@ msd_config:
   strides: [1, 2, 2, 4, 4, 1, 1]
   groups: [1, 4, 16, 16, 16, 16, 1]
   channels: [1, 128, 128, 256, 512, 1024, 1024, 1024]
+
+
+msstftd_config:
+  filters: 32

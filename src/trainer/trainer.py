@@ -54,17 +54,23 @@ class Trainer(BaseTrainer):
 
         mpd_gt_out, _, mpd_fake_out, _ = self.model.mpd(target_wav, wav_fake.detach())
         msd_gt_out, _,  msd_fake_out, _ = self.model.msd(target_wav, wav_fake.detach())
+        msstft_gt_out, _,  msstft_fake_out, _ = self.model.msstftd(target_wav, wav_fake.detach())
         batch["mpd_gt_out"] = mpd_gt_out
         batch["mpd_fake_out"] = mpd_fake_out
         batch["msd_gt_out"] = msd_gt_out
         batch["msd_fake_out"] = msd_fake_out
+        batch["msstft_gt_out"] = msstft_gt_out
+        batch["msstft_fake_out"] = msstft_fake_out
 
 
-        mpd_disc_loss, msd_disc_loss, disc_loss = self.criterion.discriminator_loss(batch)
+
+
+        mpd_disc_loss, msd_disc_loss, msstft_disc_loss, disc_loss = self.criterion.discriminator_loss(batch)
 
         if self.is_train:
             self._clip_grad_norm(self.model.mpd)
             self._clip_grad_norm(self.model.msd)
+            self._clip_grad_norm(self.model.msstftd)
 
         if self.is_train:
             disc_loss.backward()
@@ -74,12 +80,16 @@ class Trainer(BaseTrainer):
         #disc call for generator loss
         _, mpd_gt_feats, mpd_fake_out, mpd_fake_feats = self.model.mpd(target_wav, wav_fake)
         _, msd_gt_feats, msd_fake_out, msd_fake_feats = self.model.msd(target_wav, wav_fake)     
+        _, msstft_gt_feats, msstft_fake_out, msstft_fake_feats = self.model.msstftd(target_wav, wav_fake)     
         batch["mpd_fake_out"] = mpd_fake_out
         batch["mpd_fake_feats"] = mpd_fake_feats
         batch["mpd_gt_feats"] = mpd_gt_feats
         batch["msd_fake_out"] = msd_fake_out
         batch["msd_fake_feats"] = msd_fake_feats
         batch["msd_gt_feats"] = msd_gt_feats
+        batch["msstft_gt_feats"] = msstft_gt_feats
+        batch["msstft_fake_out"] = msstft_fake_out
+        batch["msstft_fake_feats"] = msstft_fake_feats
 
 
         batch["mel_spec_fake"] = self.create_mel_spec( batch["generated_wav"].squeeze(1))
@@ -87,8 +97,9 @@ class Trainer(BaseTrainer):
         
         mpd_gen_loss, msd_gen_loss,\
         mpd_feats_gen_loss, msd_feats_gen_loss,\
-        mel_spec_loss, gen_loss =\
+        mel_spec_loss, msstft_gen_loss, msstft_feats_gen_loss, gen_loss =\
             self.criterion.generator_loss(batch)
+        
 
 
         if self.is_train:
@@ -103,8 +114,11 @@ class Trainer(BaseTrainer):
         batch["mel_spec_loss"] = mel_spec_loss
         batch["mpd_disc_loss"] = mpd_disc_loss
         batch["msd_disc_loss"] = msd_disc_loss
+        batch["msstft_disc_loss"] = msstft_disc_loss
         batch["mpd_feats_gen_loss"] = mpd_feats_gen_loss
         batch["msd_feats_gen_loss"] = msd_feats_gen_loss
+        batch["msstft_gen_loss"] = msstft_gen_loss
+        batch["msstft_feats_gen_loss"] = msstft_feats_gen_loss
         batch["gen_loss"] = gen_loss
     
         for loss_name in self.config.writer.loss_names:

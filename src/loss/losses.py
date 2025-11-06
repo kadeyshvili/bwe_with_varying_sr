@@ -82,6 +82,6 @@ class HiFiGANLoss(nn.Module):
         
         return mpd_gen_loss, msd_gen_loss, mpd_feats_gen_loss,\
                 msd_feats_gen_loss, mel_spec_loss, spec_loss,\
-                mpd_gen_loss + msd_gen_loss + 45*mel_spec_loss + 45*spec_loss + 2*mpd_feats_gen_loss + 2*msd_feats_gen_loss
+                mpd_gen_loss + msd_gen_loss + 20*mel_spec_loss + 20*spec_loss + 2*mpd_feats_gen_loss + 2*msd_feats_gen_loss
         
         

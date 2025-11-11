@@ -19,12 +19,28 @@ class MetricTracker:
         self._data = pd.DataFrame(index=keys, columns=["total", "counts", "average"])
         self.reset()
 
-    def reset(self):
+    def reset(self, preserve_metrics=False):
         """
         Reset all metrics after epoch end.
+ 
+        Args:
+            preserve_metrics (bool): if True, don't reset the metrics
+                that are related to evaluation (like MOS, SISDR, etc.)
         """
-        for col in self._data.columns:
-            self._data[col].values[:] = 0
+        if preserve_metrics:
+            metrics_to_preserve = [
+                key for key in self._data.index 
+                if "_4_8" in key or "_8_16" in key
+            ]
+ 
+            for col in self._data.columns:
+                for key in self._data.index:
+                    if key not in metrics_to_preserve:
+                        self._data.loc[key, col] = 0
+        else:
+            for col in self._data.columns:
+                self._data[col].values[:] = 0
+ 
 
     def update(self, key, value, n=1):
         """

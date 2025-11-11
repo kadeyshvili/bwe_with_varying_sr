@@ -4,6 +4,8 @@ from hydra.utils import instantiate
 
 from src.datasets.collate import collate_fn
 from src.utils.init_utils import set_worker_seed
+from src.datasets import SRConsistentBatchSampler
+import torch
 
 
 def inf_loop(dataloader):
@@ -16,9 +18,6 @@ def inf_loop(dataloader):
     """
     for loader in repeat(dataloader):
         yield from loader
-
-
-
 
 def get_dataloaders(config, device):
     """
@@ -38,6 +37,7 @@ def get_dataloaders(config, device):
             tensor name.
     """
 
+
     # dataloaders init
     dataloaders = {}
     for dataset_partition in config.datasets.keys():
@@ -51,13 +51,14 @@ def get_dataloaders(config, device):
             f"be larger than the dataset length ({len(dataset)})"
         )
 
-        partition_dataloader = instantiate(
-            config.dataloader[dataset_partition],
+        batch_sampler = SRConsistentBatchSampler(dataset, config.dataloader[dataset_partition].batch_size)
+        partition_dataloader = torch.utils.data.DataLoader(
             dataset=dataset,
+            batch_sampler=batch_sampler,
             collate_fn=collate_fn,
-            drop_last=(dataset_partition == "train"),
-            shuffle=(dataset_partition == "train"),
             worker_init_fn=set_worker_seed,
+            num_workers=config.dataloader[dataset_partition].num_workers,
+            pin_memory=config.dataloader[dataset_partition].pin_memory
         )
         dataloaders[dataset_partition] = partition_dataloader
 

@@ -29,8 +29,7 @@ class MetricTracker:
         """
         if preserve_metrics:
             metrics_to_preserve = [
-                key for key in self._data.index 
-                if "_4_8" in key or "_8_16" in key
+                key for key in self._data.index if "_4_8" in key or "_8_16" in key or "_4_16" in key
             ]
  
             for col in self._data.columns:

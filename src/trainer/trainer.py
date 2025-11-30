@@ -9,6 +9,8 @@ from src.trainer.base_trainer import BaseTrainer
 import torch.nn.functional as F
 from src.model import HiFiGANWithMRF
 from hydra.utils import instantiate
+import librosa
+import numpy as np
 
 
 
@@ -46,6 +48,21 @@ class Trainer(BaseTrainer):
             wav_fake = self.model.generator(initial_wav, initial_sr, target_sr)
         else:
             wav_fake = self.model.generator(initial_wav, **batch)
+
+
+        if initial_sr==8000 and target_sr==16000:
+            resampled_audio_4khz = []
+            for i in range(initial_wav.shape[0]):
+                x_single = target_wav[i].cpu().numpy()
+                x_resampled = librosa.resample(
+                    x_single, orig_sr=16000, target_sr=4000, res_type="polyphase"
+                )
+                
+                resampled_audio_4khz.append(x_resampled)
+            x_resampled_4khz= np.stack(resampled_audio_4khz)
+            x_resampled_4khz = torch.tensor(x_resampled_4khz, dtype=target_wav.dtype).to(target_wav.device)
+            batch_clean = {k: v for k, v in batch.items() if k not in ("initial_sr", "target_sr")}
+            batch['wav_16k_from_4k_gen'] = self.model.generator(x_resampled_4khz , initial_sr=4000, target_sr=16000, **batch_clean)
  
         if target_wav.shape != wav_fake.shape:
             wav_fake = torch.stack([F.pad(wav, (0, target_wav.shape[2] - wav_fake.shape[2]), value=0) for wav in wav_fake])

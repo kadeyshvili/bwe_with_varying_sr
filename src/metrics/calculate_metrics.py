@@ -30,6 +30,7 @@ class Metric(ABC):
         self.results = {
             "4_8": defaultdict(list),
             "8_16": defaultdict(list),
+            "4_16": defaultdict(list),
             "default": defaultdict(list)
         }
         self.current_mode = "default"
@@ -45,6 +46,8 @@ class Metric(ABC):
                 self.current_mode = "4_8"
             elif initial_sr == 8000 and target_sr == 16000:
                 self.current_mode = "8_16"
+            elif initial_sr == 4000 and target_sr == 16000:
+                self.current_mode = "4_16"
             else:
                 self.current_mode = "default"
         else:
@@ -276,6 +279,8 @@ class LSD_LF(Metric):
             self.current_mode = "4_8"
         elif initial_sr == 8000 and target_sr == 16000:
             self.current_mode = "8_16"
+        elif initial_sr == 4000 and target_sr == 16000:
+            self.current_mode = "4_16"
         else:
             self.current_mode = "default"
         self.results[self.current_mode] = defaultdict(list)
@@ -315,6 +320,8 @@ class LSD_HF(Metric):
             self.current_mode = "4_8"
         elif initial_sr == 8000 and target_sr == 16000:
             self.current_mode = "8_16"
+        elif initial_sr == 4000 and target_sr == 16000:
+            self.current_mode = "4_16"
         else:
             self.current_mode = "default"
         self.results[self.current_mode] = defaultdict(list)

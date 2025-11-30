@@ -1,5 +1,6 @@
 train: []
 inference:
+    #4-8
   - _target_: src.metrics.MOSNet
     name: "MOS_4_8"
     sr: 8000
@@ -7,8 +8,6 @@ inference:
     name: "SISDR_4_8"
   - _target_: src.metrics.SignalToNoiseRatio
     name: "SNR_4_8"
-  # - _target_: src.metrics.VGGDistance
-  #   name: "VGG_dist"
   - _target_: src.metrics.LSD
     name: "LSD_4_8"
   - _target_: src.metrics.LSD_LF
@@ -25,6 +24,8 @@ inference:
     name: "CBAK_4_8"
   - _target_: src.metrics.COVL
     name: "COVL_4_8"
+
+    #8-16
   - _target_: src.metrics.MOSNet
     name: "MOS_8_16"
     sr: 16000
@@ -32,8 +33,6 @@ inference:
     name: "SISDR_8_16"
   - _target_: src.metrics.SignalToNoiseRatio
     name: "SNR_8_16"
-  # - _target_: src.metrics.VGGDistance
-  #   name: "VGG_dist"
   - _target_: src.metrics.LSD
     name: "LSD_8_16"
   - _target_: src.metrics.LSD_LF
@@ -50,3 +49,28 @@ inference:
     name: "CBAK_8_16"
   - _target_: src.metrics.COVL
     name: "COVL_8_16"
+    
+    #4-16
+  - _target_: src.metrics.MOSNet
+    name: "MOS_4_16"
+    sr: 16000
+  - _target_: src.metrics.ScaleInvariantSignalToDistortionRatio
+    name: "SISDR_4_16"
+  - _target_: src.metrics.SignalToNoiseRatio
+    name: "SNR_4_16"
+  - _target_: src.metrics.LSD
+    name: "LSD_4_16"
+  - _target_: src.metrics.LSD_LF
+    name: "LSD_LF_4_16"
+  - _target_: src.metrics.LSD_HF
+    name: "LSD_HF_4_16"
+  - _target_: src.metrics.STOI
+    name: "STOI_4_16"
+  - _target_: src.metrics.PESQ
+    name: "PESQ_4_16"
+  - _target_: src.metrics.CSIG
+    name: "CSIG_4_16"
+  - _target_: src.metrics.CBAK
+    name: "CBAK_4_16"
+  - _target_: src.metrics.COVL
+    name: "COVL_4_16"

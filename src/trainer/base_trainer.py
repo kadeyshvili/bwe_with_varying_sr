@@ -315,6 +315,7 @@ class BaseTrainer:
         self.writer.mode = part
         metrics_4_8 = {}
         metrics_8_16 = {}
+        metrics_4_16 = {}
         
         with torch.no_grad():
             for batch_idx, batch in tqdm(
@@ -358,7 +359,21 @@ class BaseTrainer:
                             metrics_8_16[k].append(mean)
                         else:
                             metrics_8_16[k] = [mean]
-                
+
+
+                    #calculate metrics for 4-16
+                    batch_metrics = calculate_all_metrics(
+                        batch['wav_16k_from_4k_gen'], 
+                        batch['wav_hr'],
+                        self.metrics['inference'], 
+                        4000, 
+                        16000
+                    )
+                    for k, (mean, std) in batch_metrics.items():
+                        if k in metrics_4_16:
+                            metrics_4_16[k].append(mean)
+                        else:
+                            metrics_4_16[k] = [mean]                
                 if self.config.dataloader[part].batch_size == 1:
                     self._log_batch(batch_idx, batch, part)
                     
@@ -371,6 +386,10 @@ class BaseTrainer:
             self.evaluation_metrics.update(k, mean_val)
 
         for k, values in metrics_8_16.items():
+            mean_val = np.mean(values)
+            self.evaluation_metrics.update(k, mean_val)
+
+        for k, values in metrics_4_16.items():
             mean_val = np.mean(values)
             self.evaluation_metrics.update(k, mean_val)
         

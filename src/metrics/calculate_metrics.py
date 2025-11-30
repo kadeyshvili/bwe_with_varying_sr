@@ -62,19 +62,7 @@ class Metric(ABC):
         if mode is None:
             mode = self.current_mode
         return self.results[mode]
- 
-    def save_result(self, epoch_info):
-        """Сохранение результатов в epoch_info"""
-        for mode, results in self.results.items():
-            if mode == "default" or not results:
-                continue
- 
-            for key, value in results.items():
-                if value:
-                    metric_name = f"{self.name}_{mode}"
-                    epoch_info[f"val_{metric_name}"] = np.mean(value)
- 
- 
+
 class MOSNet(Metric):
     name = "MOS"
  
@@ -462,11 +450,11 @@ class COVL(CSEMetric):
  
  
 def calculate_all_metrics(wavs, reference_wavs, metrics, initial_sr, target_sr, n_max_files=None):
-    mode_key = f"{initial_sr // 1000}_{target_sr // 1000}"
-    metrics_to_use = []
-    for metric in metrics:
-        if mode_key in metric.name:
-            metrics_to_use.append(metric)
+    # mode_key = f"{initial_sr // 1000}_{target_sr // 1000}"
+    # metrics_to_use = []
+    # for metric in metrics:
+        # if mode_key in metric.name:
+            # metrics_to_use.append(metric)
  
     scores = {}
     for x, y in tqdm(
@@ -488,7 +476,7 @@ def calculate_all_metrics(wavs, reference_wavs, metrics, initial_sr, target_sr, 
             else:
                 metric.__call__(x, y, target_sr, initial_sr)
  
-    for metric in metrics_to_use:
+    for metric in metrics:
         results = metric.get_result(f"{initial_sr // 1000}_{target_sr // 1000}")
  
         if results["mean"]:

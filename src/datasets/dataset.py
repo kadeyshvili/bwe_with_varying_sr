@@ -63,10 +63,12 @@ class VCTKDataset(Dataset):
             self.current_mode = mode
         else:
             mode_choice = random.random()
-            if mode_choice < 0.5:
+            if mode_choice < 0.33:
                 self.current_mode = "4_8"
-            else:
+            elif mode_choice < 0.67:
                 self.current_mode = "8_16"
+            else:
+                self.current_mode = "4_16"
                 
         if self.current_mode == "4_8":
             self.audio_files_lr = self.audio_files_4k
@@ -81,6 +83,13 @@ class VCTKDataset(Dataset):
             self.initial_sr = 8000
             self.target_sr = 16000
             self.mel_creator_lr = self.mel_creator_8k
+            self.mel_creator_hr = self.mel_creator_16k
+        elif self.current_mode == "4_16":
+            self.audio_files_lr = self.audio_files_4k
+            self.audio_files_hr = self.audio_files_16k
+            self.initial_sr = 4000
+            self.target_sr = 16000
+            self.mel_creator_lr = self.mel_creator_4k
             self.mel_creator_hr = self.mel_creator_16k
         return self.current_mode
         
@@ -137,12 +146,14 @@ class SRConsistentBatchSampler(torch.utils.data.Sampler):
         indices = list(range(len(self.dataset)))
         random.shuffle(indices)
     
-        half_len = len(indices) // 2
-        indices_4_8 = indices[:half_len]
-        indices_8_16 = indices[half_len:]
+        third_len = len(indices) // 3
+        indices_4_8 = indices[:third_len]
+        indices_8_16 = indices[third_len:2*third_len]
+        indices_4_16 = indices[2*third_len:]
         
         mode_4_8_batches = []
         mode_8_16_batches = []
+        mode_4_16_batches = []
         for i in range(0, len(indices_4_8), self.batch_size):
             batch = [(indices_4_8[j], '4_8') for j in range(i, min(i + self.batch_size, len(indices_4_8)))]
             mode_4_8_batches.append(batch)
@@ -151,18 +162,26 @@ class SRConsistentBatchSampler(torch.utils.data.Sampler):
             batch = [(indices_8_16[j], '8_16') for j in range(i, min(i + self.batch_size, len(indices_8_16)))]
             mode_8_16_batches.append(batch)
         
+        for i in range(0, len(indices_4_16), self.batch_size):
+            batch = [(indices_4_16[j], '4_16') for j in range(i, min(i + self.batch_size, len(indices_4_16)))]
+            mode_4_16_batches.append(batch)
+        
         interleaved_batches = []
-        max_batches = max(len(mode_4_8_batches), len(mode_8_16_batches))
+        max_batches = max(len(mode_4_8_batches), len(mode_8_16_batches), len(mode_4_16_batches))
         
         for i in range(max_batches):
             if i < len(mode_4_8_batches):
                 interleaved_batches.append(mode_4_8_batches[i])
             if i < len(mode_8_16_batches):
                 interleaved_batches.append(mode_8_16_batches[i])
+            if i < len(mode_4_16_batches):
+                interleaved_batches.append(mode_4_16_batches[i])
         
         return iter(interleaved_batches)
     
     def __len__(self):
-        total_4_8 = (len(self.dataset) // 2 + self.batch_size - 1) // self.batch_size
-        total_8_16 = (len(self.dataset) - len(self.dataset) // 2 + self.batch_size - 1) // self.batch_size
-        return total_4_8 + total_8_16
+        third_len = len(self.dataset) // 3
+        total_4_8 = (third_len + self.batch_size - 1) // self.batch_size
+        total_8_16 = (third_len + self.batch_size - 1) // self.batch_size
+        total_4_16 = ((len(self.dataset) - 2*third_len) + self.batch_size - 1) // self.batch_size
+        return total_4_8 + total_8_16 + total_4_16

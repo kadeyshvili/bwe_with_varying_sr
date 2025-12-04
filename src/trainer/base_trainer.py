@@ -79,6 +79,7 @@ class BaseTrainer:
         self.disc_lr_scheduler = disc_lr_scheduler
         self.create_mel_spec_8_16 = MelSpectrogram(sr=16000).to(self.device)
         self.create_mel_spec_4_8 = MelSpectrogram(sr=8000).to(self.device)
+        self.create_mel_spec = MelSpectrogram(sr=16000).to(self.device)
         # define dataloaders
         self.train_dataloader = dataloaders["train"]
         if epoch_len is None:
@@ -237,6 +238,12 @@ class BaseTrainer:
                             epoch, self._progress(batch_idx), batch["gen_loss_8_16"].item(), batch['disc_loss_8_16'].item()
                         )
                     )
+                elif batch['initial_sr'] == 4000 and batch['target_sr'] == 16000:
+                    self.logger.debug(
+                        "Train Epoch: {} {} Generator Loss_4_16: {:.6f}, Discriminator Loss_4_16: {:.6f}".format(
+                            epoch, self._progress(batch_idx), batch["gen_loss"].item(), batch['disc_loss'].item()
+                        )
+                    )
                 self.writer.add_scalar(
                     "learning_rate_generator", self.gen_lr_scheduler.get_last_lr()[0]
                 )
@@ -360,20 +367,19 @@ class BaseTrainer:
                         else:
                             metrics_8_16[k] = [mean]
 
-
-                    #calculate metrics for 4-16
+                elif initial_sr == 4000 and target_sr == 16000:
                     batch_metrics = calculate_all_metrics(
-                        batch['wav_16k_from_4k_gen'], 
+                        batch['generated_wav'], 
                         batch['wav_hr'],
                         self.metrics['inference'], 
-                        4000, 
-                        16000
+                        initial_sr, 
+                        target_sr
                     )
                     for k, (mean, std) in batch_metrics.items():
                         if k in metrics_4_16:
                             metrics_4_16[k].append(mean)
                         else:
-                            metrics_4_16[k] = [mean]                
+                            metrics_4_16[k] = [mean]             
                 if self.config.dataloader[part].batch_size == 1:
                     self._log_batch(batch_idx, batch, part)
                     

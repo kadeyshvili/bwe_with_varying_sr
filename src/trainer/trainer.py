@@ -49,21 +49,6 @@ class Trainer(BaseTrainer):
         else:
             wav_fake = self.model.generator(initial_wav, **batch)
 
-
-        if initial_sr==8000 and target_sr==16000:
-            resampled_audio_4khz = []
-            for i in range(initial_wav.shape[0]):
-                x_single = target_wav[i].cpu().numpy()
-                x_resampled = librosa.resample(
-                    x_single, orig_sr=16000, target_sr=4000, res_type="polyphase"
-                )
-                
-                resampled_audio_4khz.append(x_resampled)
-            x_resampled_4khz= np.stack(resampled_audio_4khz)
-            x_resampled_4khz = torch.tensor(x_resampled_4khz, dtype=target_wav.dtype).to(target_wav.device)
-            batch_clean = {k: v for k, v in batch.items() if k not in ("initial_sr", "target_sr")}
-            batch['wav_16k_from_4k_gen'] = self.model.generator(x_resampled_4khz , initial_sr=4000, target_sr=16000, **batch_clean)
- 
         if target_wav.shape != wav_fake.shape:
             wav_fake = torch.stack([F.pad(wav, (0, target_wav.shape[2] - wav_fake.shape[2]), value=0) for wav in wav_fake])
         batch["generated_wav"] = wav_fake
@@ -71,6 +56,8 @@ class Trainer(BaseTrainer):
             mel_spec_fake = self.create_mel_spec_4_8(wav_fake).squeeze(1)
         elif initial_sr==8000 and target_sr == 16000:
             mel_spec_fake = self.create_mel_spec_8_16(wav_fake).squeeze(1)
+        elif initial_sr==4000 and target_sr==16000:
+            mel_spec_fake = self.create_mel_spec(wav_fake).squeeze(1)
         batch['mel_spec_fake'] = mel_spec_fake
         if self.is_train:
             self.disc_optimizer.zero_grad()
@@ -86,6 +73,8 @@ class Trainer(BaseTrainer):
             mpd_disc_loss_8_16, msd_disc_loss_8_16, disc_loss_8_16 = self.criterion.discriminator_loss_8_16(batch)
         elif initial_sr == 4000 and target_sr == 8000:
             mpd_disc_loss_4_8, msd_disc_loss_4_8, disc_loss_4_8 = self.criterion.discriminator_loss_4_8(batch)
+        elif initial_sr == 4000 and target_sr == 16000:
+            mpd_disc_loss, msd_disc_loss, disc_loss = self.criterion.discriminator_loss(batch)
 
 
 
@@ -98,6 +87,8 @@ class Trainer(BaseTrainer):
                 disc_loss_8_16.backward()
             elif initial_sr == 4000 and target_sr == 8000:
                 disc_loss_4_8.backward()
+            elif initial_sr == 4000 and target_sr == 16000:
+                disc_loss.backward()
             self.disc_optimizer.step()
             self.gen_optimizer.zero_grad()
 
@@ -128,6 +119,15 @@ class Trainer(BaseTrainer):
                 mpd_feats_gen_loss_4_8, msd_feats_gen_loss_4_8,\
                 mel_spec_loss_4_8, gen_loss_4_8 =\
                     self.criterion.generator_loss_4_8(batch)
+            
+        elif initial_sr == 4000 and target_sr == 16000:
+            target_melspec = self.create_mel_spec(target_wav.squeeze(1))
+            batch['mel_spec_hr'] = target_melspec
+
+            mpd_gen_loss, msd_gen_loss,\
+                mpd_feats_gen_loss, msd_feats_gen_loss,\
+                mel_spec_loss, gen_loss =\
+                    self.criterion.generator_loss(batch)
 
         if self.is_train:
             self._clip_grad_norm(self.model.generator)
@@ -135,6 +135,8 @@ class Trainer(BaseTrainer):
                 gen_loss_8_16.backward()
             elif initial_sr == 4000 and target_sr == 8000:
                 gen_loss_4_8.backward()
+            elif initial_sr == 4000 and target_sr == 16000:
+                gen_loss.backward()
             self.gen_optimizer.step()
 
         if initial_sr == 8000 and target_sr==16000:
@@ -158,6 +160,17 @@ class Trainer(BaseTrainer):
             batch["mpd_feats_gen_loss_4_8"] = mpd_feats_gen_loss_4_8
             batch["msd_feats_gen_loss_4_8"] = msd_feats_gen_loss_4_8
             batch["gen_loss_4_8"] = gen_loss_4_8
+
+        elif initial_sr==4000 and target_sr==16000:
+            batch["disc_loss"] = disc_loss
+            batch["mpd_gen_loss"] = mpd_gen_loss
+            batch["msd_gen_loss"] = msd_gen_loss
+            batch["mel_spec_loss"] = mel_spec_loss
+            batch["mpd_disc_loss"] = mpd_disc_loss
+            batch["msd_disc_loss"] = msd_disc_loss
+            batch["mpd_feats_gen_loss"] = mpd_feats_gen_loss
+            batch["msd_feats_gen_loss"] = msd_feats_gen_loss
+            batch["gen_loss"] = gen_loss
 
         for loss_name in self.config.writer.loss_names:
             if loss_name in batch.keys():

@@ -57,12 +57,16 @@ class HiFiGANLoss(nn.Module):
     def __init__(self):
         super().__init__()
         self.disc_loss_4_8 = DiscriminatorLoss()
+        self.disc_loss = DiscriminatorLoss()
         self.disc_loss_8_16 = DiscriminatorLoss()
         self.gen_loss_4_8 = GeneratorLoss()
+        self.gen_loss = GeneratorLoss()
         self.gen_loss_8_16 = GeneratorLoss()
         self.melspec_loss_4_8 = MelSpectrogramLoss()
+        self.melspec_loss = MelSpectrogramLoss()
         self.melspec_loss_8_16 = MelSpectrogramLoss()
         self.fm_loss_4_8 = FeatureMatchingLoss()
+        self.fm_loss = FeatureMatchingLoss()
         self.fm_loss_8_16 = FeatureMatchingLoss()
         
         
@@ -75,7 +79,12 @@ class HiFiGANLoss(nn.Module):
         mpd_disc_loss = self.disc_loss_8_16(batch["mpd_gt_out"], batch["mpd_fake_out"])
         msd_disc_loss = self.disc_loss_8_16(batch["msd_gt_out"], batch["msd_fake_out"])
         return mpd_disc_loss, msd_disc_loss, mpd_disc_loss + msd_disc_loss
-        
+            
+    def discriminator_loss(self, batch):
+        mpd_disc_loss = self.disc_loss(batch["mpd_gt_out"], batch["mpd_fake_out"])
+        msd_disc_loss = self.disc_loss(batch["msd_gt_out"], batch["msd_fake_out"])
+        return mpd_disc_loss, msd_disc_loss, mpd_disc_loss + msd_disc_loss
+    
     def generator_loss_4_8(self, batch):
         
         mpd_gen_loss = self.gen_loss_4_8(batch["mpd_fake_out"])
@@ -91,8 +100,9 @@ class HiFiGANLoss(nn.Module):
         return mpd_gen_loss, msd_gen_loss, mpd_feats_gen_loss,\
                 msd_feats_gen_loss, mel_spec_loss,\
                 mpd_gen_loss + msd_gen_loss + 45*mel_spec_loss + 2*mpd_feats_gen_loss + 2*msd_feats_gen_loss
+
         
-    
+   
     def generator_loss_8_16(self, batch):
         
         mpd_gen_loss = self.gen_loss_8_16(batch["mpd_fake_out"])
@@ -106,5 +116,23 @@ class HiFiGANLoss(nn.Module):
         return mpd_gen_loss, msd_gen_loss, mpd_feats_gen_loss,\
                 msd_feats_gen_loss, mel_spec_loss,\
                 mpd_gen_loss + msd_gen_loss + 45*mel_spec_loss + 2*mpd_feats_gen_loss + 2*msd_feats_gen_loss
+    
+
+    def generator_loss(self, batch):
+        
+        mpd_gen_loss = self.gen_loss(batch["mpd_fake_out"])
+        msd_gen_loss = self.gen_loss(batch["msd_fake_out"])   
+
+        #TODO computation of mel specs here with given melSpecComputer as an argument
+        #for better generalization to other spectral losses
+        mel_spec_loss = self.melspec_loss(batch["mel_spec_hr"], batch["mel_spec_fake"])
+        
+        mpd_feats_gen_loss = self.fm_loss(batch["mpd_gt_feats"], batch["mpd_fake_feats"])
+        msd_feats_gen_loss = self.fm_loss(batch["msd_gt_feats"], batch["msd_fake_feats"])
+        
+        return mpd_gen_loss, msd_gen_loss, mpd_feats_gen_loss,\
+                msd_feats_gen_loss, mel_spec_loss,\
+                mpd_gen_loss + msd_gen_loss + 45*mel_spec_loss + 2*mpd_feats_gen_loss + 2*msd_feats_gen_loss
+        
         
         

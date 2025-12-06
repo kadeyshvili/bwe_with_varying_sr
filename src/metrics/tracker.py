@@ -26,10 +26,12 @@ class MetricTracker:
         Args:
             preserve_metrics (bool): if True, don't reset the metrics
                 that are related to evaluation (like MOS, SISDR, etc.)
+                and don't reset losses (they should always be reset)
         """
         if preserve_metrics:
             metrics_to_preserve = [
-                key for key in self._data.index if "_4_8" in key or "_8_16" in key or "_4_16" in key
+                key for key in self._data.index if ("_4_8" in key or "_8_16" in key or "_4_16" in key) 
+                and not any(loss_name in key for loss_name in ["loss", "grad_norm"])
             ]
  
             for col in self._data.columns:
@@ -52,6 +54,9 @@ class MetricTracker:
         """
         # if self.writer is not None:
         #     self.writer.add_scalar(key, value)
+        if key not in self._data.index:
+            new_row = pd.DataFrame([[0, 0, 0.0]], index=[key], columns=self._data.columns)
+            self._data = pd.concat([self._data, new_row])
         self._data.loc[key, "total"] += value * n
         self._data.loc[key, "counts"] += n
         self._data.loc[key, "average"] = self._data.total[key] / self._data.counts[key]

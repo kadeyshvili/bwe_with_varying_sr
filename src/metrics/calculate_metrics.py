@@ -52,9 +52,10 @@ class Metric(ABC):
                 self.current_mode = "default"
         else:
             self.current_mode = "default"
- 
-        self.results[self.current_mode] = defaultdict(list)
- 
+
+        if self.results[self.current_mode] is None or not isinstance(self.results[self.current_mode], defaultdict):
+            self.results[self.current_mode] = defaultdict(list)
+
         pass
  
     def get_result(self, mode=None):
@@ -450,12 +451,11 @@ class COVL(CSEMetric):
  
  
 def calculate_all_metrics(wavs, reference_wavs, metrics, initial_sr, target_sr, n_max_files=None):
-    # mode_key = f"{initial_sr // 1000}_{target_sr // 1000}"
-    # metrics_to_use = []
-    # for metric in metrics:
-        # if mode_key in metric.name:
-            # metrics_to_use.append(metric)
- 
+    mode_key = f"{initial_sr // 1000}_{target_sr // 1000}"
+    for metric in metrics:
+        if metric.results[mode_key] is None or not isinstance(metric.results[mode_key], defaultdict):
+            metric.results[mode_key] = defaultdict(list)
+
     scores = {}
     for x, y in tqdm(
         itertools.islice(zip(wavs, reference_wavs), n_max_files),

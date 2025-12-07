@@ -1,8 +1,4 @@
-from pathlib import Path
-
-import pandas as pd
 import torch
-
 from src.logger.utils import plot_spectrogram
 from src.metrics.tracker import MetricTracker
 from src.trainer.base_trainer import BaseTrainer
@@ -61,7 +57,9 @@ class Trainer(BaseTrainer):
                 resampled_audio_4khz.append(x_resampled)
             x_resampled_4khz= np.stack(resampled_audio_4khz)
             x_resampled_4khz = torch.tensor(x_resampled_4khz, dtype=target_wav.dtype).to(target_wav.device)
+            batch['wav_4k_resampled'] = x_resampled_4khz
             batch_clean = {k: v for k, v in batch.items() if k not in ("initial_sr", "target_sr")}
+            batch['melspec_4_16_lr'] = self.create_mel_spec_4khz(x_resampled_4khz).squeeze(1)
             batch['wav_16k_from_4k_gen'] = self.model.generator(x_resampled_4khz , initial_sr=4000, target_sr=16000, **batch_clean)
  
         if target_wav.shape != wav_fake.shape:
@@ -71,6 +69,10 @@ class Trainer(BaseTrainer):
             mel_spec_fake = self.create_mel_spec_4_8(wav_fake).squeeze(1)
         elif initial_sr==8000 and target_sr == 16000:
             mel_spec_fake = self.create_mel_spec_8_16(wav_fake).squeeze(1)
+            mel_spec_fake_4_16 = self.create_mel_spec(batch['wav_16k_from_4k_gen']).squeeze(1)
+            batch['mel_spec_fake_4_16'] = mel_spec_fake_4_16
+            initial_melspec_4_16_hr =  self.create_mel_spec(target_wav).squeeze(1)
+            batch['initial_melspec_4_16_hr'] = initial_melspec_4_16_hr
         batch['mel_spec_fake'] = mel_spec_fake
         if self.is_train:
             self.disc_optimizer.zero_grad()
@@ -181,39 +183,68 @@ class Trainer(BaseTrainer):
 
         # logging scheme might be different for different partitions
         if mode == "train":  # the method is called only every self.log_step steps
-            self.log_spectrogram(partition='train', idx=0, **batch)
-            self.log_audio(partition='train', idx=0, **batch)
-
+            for regime_key in ["4_8", "8_16", "4_16"]:
+                samples = self.samples_for_logging.get(regime_key, [])
+                for idx, sample in enumerate(samples[:5]):
+                    self.log_spectrogram(partition='train', idx=idx, **sample)
+                    self.log_audio(partition='train', idx=idx, **sample)
+            self.samples_for_logging = {
+                "4_8": [],
+                "8_16": [],
+                "4_16": []
+            }
         else:
-            # Log Stuff
-            self.log_spectrogram(partition='val', idx=batch_idx, **batch)
-            self.log_audio(partition='val', idx=batch_idx,**batch)
+            for regime_key in ["4_8", "8_16", "4_16"]:
+                samples = self.samples_for_logging.get(regime_key, [])
+                for idx, sample in enumerate(samples[:5]):
+                    self.log_spectrogram(partition='val', idx=idx, **sample)
+                    self.log_audio(partition='val', idx=idx, **sample)
+            # Reset samples after logging
+            self.samples_for_logging = {
+                "4_8": [],
+                "8_16": [],
+                "4_16": []
+            }
 
 
     def log_audio(self, wav_lr, wav_hr,  generated_wav, partition, idx, **batch):
-        init_len_lr = batch['initial_len_lr'][0]
-        init_len_hr = batch['initial_len_hr'][0]
-        initial_sr = batch['initial_sr']
-        target_sr = batch['target_sr']
-        if partition != 'val':
-            self.writer.add_audio(f"initial_wav_lr_{initial_sr}_{target_sr}", wav_lr[0][:, :init_len_lr], initial_sr)
-            self.writer.add_audio(f"initial_wav_hr_{initial_sr}_{target_sr}", wav_hr[0][:, :init_len_hr], target_sr)
-            self.writer.add_audio(f"generated_wav_{initial_sr}_{target_sr}", generated_wav[0][:, :init_len_hr], target_sr)
-        else:
-            self.writer.add_audio(f"initial_wav_lr_{initial_sr}_{target_sr}_{idx}", wav_lr[0][:, :init_len_lr], initial_sr)
-            self.writer.add_audio(f"initial_wav_hr_{initial_sr}_{target_sr}_{idx}", wav_hr[0][:, :init_len_hr], target_sr)
-            self.writer.add_audio(f"generated_wav_{initial_sr}_{target_sr}_{idx}", generated_wav[0][:, :init_len_hr], target_sr)
+        initial_len_lr = batch['initial_len_lr']
+        initial_len_hr = batch['initial_len_hr']
+        for i in range(len(initial_len_lr)):
+
+            init_len_lr = initial_len_lr[i]
+            init_len_hr = initial_len_hr[i]
+            
+            initial_sr = batch['initial_sr']
+            target_sr = batch['target_sr']
+            regime = batch.get('regime', None)
+            
+            self.writer.add_audio(f"initial_wav_lr_{initial_sr}_{target_sr}_{i}", wav_lr[i][:, :init_len_lr], initial_sr)
+            self.writer.add_audio(f"initial_wav_hr_{initial_sr}_{target_sr}_{i}", wav_hr[i][:, :init_len_hr], target_sr)
+            self.writer.add_audio(f"generated_wav_{initial_sr}_{target_sr}_{i}", generated_wav[i][:, :init_len_hr], target_sr)
 
 
     def log_spectrogram(self, melspec_lr, melspec_hr,  mel_spec_fake, partition, idx, **batch):
         initial_sr = batch['initial_sr']
         target_sr = batch['target_sr']
-        spectrogram_for_plot_real_lr = melspec_lr[0].detach().cpu()[:, :batch['initial_len_melspec_lr'][0]]
-        spectrogram_for_plot_real_hr = melspec_hr[0].detach().cpu()[:, :batch['initial_len_melspec_hr'][0]]
-        spectrogram_for_plot_fake = mel_spec_fake[0].detach().cpu()
-        image = plot_spectrogram(spectrogram_for_plot_real_lr)
-        self.writer.add_image(f"melspectrogram_real_lr_{initial_sr}_{target_sr}", image)
-        image_hr = plot_spectrogram(spectrogram_for_plot_real_hr)
-        self.writer.add_image(f"melspectrogram_real_hr_{initial_sr}_{target_sr}", image_hr)
-        image_fake = plot_spectrogram(spectrogram_for_plot_fake)
-        self.writer.add_image(f"melspectrogram_fake_{initial_sr}_{target_sr}", image_fake)
+        regime = batch.get('regime', None)
+
+        
+        initial_len_melspec_lr = batch['initial_len_melspec_lr']
+        initial_len_melspec_hr = batch['initial_len_melspec_hr']
+        for i in range(len(initial_len_melspec_lr)):
+
+            
+            len_melspec_lr =  initial_len_melspec_lr[i]
+            len_melspec_hr = initial_len_melspec_hr[i]
+
+            spectrogram_for_plot_real_lr = melspec_lr[i].detach().cpu()[:, :len_melspec_lr]
+            spectrogram_for_plot_real_hr = melspec_hr[i].detach().cpu()[:, :len_melspec_hr]
+            spectrogram_for_plot_fake = mel_spec_fake[i].detach().cpu()
+            
+            image = plot_spectrogram(spectrogram_for_plot_real_lr)
+            self.writer.add_image(f"melspectrogram_real_lr_{initial_sr}_{target_sr}_{i}", image)
+            image_hr = plot_spectrogram(spectrogram_for_plot_real_hr)
+            self.writer.add_image(f"melspectrogram_real_hr_{initial_sr}_{target_sr}_{i}", image_hr)
+            image_fake = plot_spectrogram(spectrogram_for_plot_fake)
+            self.writer.add_image(f"melspectrogram_fake_{initial_sr}_{target_sr}_{i}", image_fake)

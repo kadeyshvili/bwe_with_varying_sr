@@ -60,7 +60,10 @@ class Trainer(BaseTrainer):
             batch['wav_4k_resampled'] = x_resampled_4khz
             batch_clean = {k: v for k, v in batch.items() if k not in ("initial_sr", "target_sr")}
             batch['melspec_4_16_lr'] = self.create_mel_spec_4khz(x_resampled_4khz).squeeze(1)
-            batch['wav_16k_from_4k_gen'] = self.model.generator(x_resampled_4khz , initial_sr=4000, target_sr=16000, **batch_clean)
+            wav_16k_from_4k_gen = self.model.generator(x_resampled_4khz , initial_sr=4000, target_sr=16000, **batch_clean)
+            if target_wav.shape != wav_16k_from_4k_gen.shape:
+                wav_16k_from_4k_gen = torch.stack([F.pad(wav, (0, target_wav.shape[2] - wav_16k_from_4k_gen.shape[2]), value=0) for wav in wav_16k_from_4k_gen])
+            batch['wav_16k_from_4k_gen'] = wav_16k_from_4k_gen
  
         if target_wav.shape != wav_fake.shape:
             wav_fake = torch.stack([F.pad(wav, (0, target_wav.shape[2] - wav_fake.shape[2]), value=0) for wav in wav_fake])

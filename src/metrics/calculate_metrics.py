@@ -52,10 +52,6 @@ class Metric(ABC):
                 self.current_mode = "default"
         else:
             self.current_mode = "default"
-
-        if self.results[self.current_mode] is None or not isinstance(self.results[self.current_mode], defaultdict):
-            self.results[self.current_mode] = defaultdict(list)
-
         pass
  
     def get_result(self, mode=None):
@@ -99,6 +95,9 @@ class MOSNet(Metric):
         ).to(self.device)
         samples = samples.to(self.device)
         
+        if samples.dim() == 3:
+            samples = samples.squeeze(1)
+        
         samples /= samples.abs().max(-1, keepdim=True)[0]
         samples = [resample(s).squeeze() for s in samples]
 
@@ -113,7 +112,7 @@ class MOSNet(Metric):
 
         return np.mean(fid_per_splits)
  
- 
+
 class ScaleInvariantSignalToDistortionRatio(Metric):
     """
     See https://arxiv.org/pdf/1811.02508.pdf
@@ -126,7 +125,9 @@ class ScaleInvariantSignalToDistortionRatio(Metric):
     def __call__(self, samples, real_samples, target_sr, initial_sr=None):
         super().__call__(samples, real_samples, target_sr, initial_sr)
  
-        real_samples, samples = real_samples.squeeze(), samples.squeeze()
+        real_samples = real_samples.squeeze()
+        samples = samples.squeeze()
+        
         if real_samples.dim() == 1:
             real_samples = real_samples[None]
             samples = samples[None]
@@ -153,10 +154,15 @@ class SignalToNoiseRatio(Metric):
     def __call__(self, samples, real_samples, target_sr, initial_sr=None):
         super().__call__(samples, real_samples, target_sr, initial_sr)
  
-        real_samples, samples = real_samples.squeeze(), samples.squeeze()
+        if real_samples.dim() == 3:
+            real_samples = real_samples.squeeze(1)
+        if samples.dim() == 3:
+            samples = samples.squeeze(1)
+        
         if real_samples.dim() == 1:
-            real_samples = real_samples[None]
-            samples = samples[None]
+            real_samples = real_samples.unsqueeze(0)
+        if samples.dim() == 1:
+            samples = samples.unsqueeze(0)
  
         e_target = real_samples.square().sum(dim=1)
         e_res = (samples - real_samples).square().sum(dim=1)
@@ -184,15 +190,28 @@ class VGGDistance(Metric):
         # Определяем режим апсемплинга
         super().__call__(samples, real_samples, target_sr, initial_sr)
  
-        real_samples = real_samples.squeeze().cpu().numpy()
-        samples = samples.squeeze().cpu().numpy()
+        if real_samples.dim() == 3:
+            real_samples = real_samples.squeeze(1)
+        if samples.dim() == 3:
+            samples = samples.squeeze(1)
+        
+        real_samples = real_samples.cpu().numpy()
+        samples = samples.cpu().numpy()
+        
+        if real_samples.ndim == 1:
+            real_samples = real_samples[None]
+        if samples.ndim == 1:
+            samples = samples[None]
+        
         assert (
             samples.shape[1] >= 16384
-        ), "too small segment size, everything will fall in this function"
+        ), f"too small segment size {samples.shape[1]}, need at least 16384 samples"
+        
         real_embs, fake_embs = [], []
         for real_s, fake_s in zip(real_samples, samples):
             real_embs.append(self.model(real_s, self.sr))
             fake_embs.append(self.model(fake_s, self.sr))
+        
         real_embs = torch.stack(real_embs, dim=0)
         fake_embs = torch.stack(fake_embs, dim=0)
         dist = (real_embs - fake_embs).square().mean(dim=1)
@@ -201,7 +220,7 @@ class VGGDistance(Metric):
         self.results[self.current_mode]["mean"].append(np.mean(dist))
         self.results[self.current_mode]["std"].append(np.std(dist))
  
-        return np.mean(dist)
+        return np.mean(dist) 
  
  
 class STFTMag(nn.Module):
@@ -225,37 +244,47 @@ class LSD(Metric):
     def better(self, first, second):
         return first < second
  
-    def __call__(self, out_sig, ref_sig, target_sr, initial_sr=None):
+    def __call__(self, out_sig, ref_sig, target_sr, initial_sr):
         """
         Compute LSD (log spectral distance)
         Arguments:
             out_sig: vector (torch.Tensor), enhanced signal [B,T]
             ref_sig: vector (torch.Tensor), reference signal(ground truth) [B,T]
+            initial_sr: initial sample rate
+            target_sr: target sample rate
         """
         super().__call__(out_sig, ref_sig, target_sr, initial_sr)
  
-        out_sig = out_sig.squeeze().cpu()
-        ref_sig = ref_sig.squeeze().cpu()
+        out_sig = out_sig.cpu().squeeze(1)
+        ref_sig = ref_sig.cpu().squeeze(1)
+        
  
         stft = STFTMag(2048, 512)
-        sp = torch.log10(stft(ref_sig).square().clamp(1e-8))
-        st = torch.log10(stft(out_sig).square().clamp(1e-8))   
-        lsd = (sp - st).square().mean(dim=1).sqrt().mean()
-        lsd = lsd.cpu().numpy()
+        
+        batch_size = out_sig.shape[0]
+        lsd_list = []
+        
+        for i in range(batch_size):
+            sp = torch.log10(stft(ref_sig[i]).square().clamp(1e-8))
+            st = torch.log10(stft(out_sig[i]).square().clamp(1e-8))
+            lsd_sample = (sp - st).square().mean(dim=1).sqrt().mean()
+            lsd_list.append(lsd_sample.item())
+        
+        
  
-        self.results[self.current_mode]["mean"].append(np.mean(lsd))
-        self.results[self.current_mode]["std"].append(np.std(lsd))
+        self.results[self.current_mode]["mean"].append(np.mean(lsd_list))
+        self.results[self.current_mode]["std"].append(np.std(lsd_list))
  
-        return np.mean(lsd)
- 
- 
+        return np.mean(lsd_list) 
+    
+
 class LSD_LF(Metric):
     name = "LSD_LF"
  
     def better(self, first, second):
         return first < second
  
-    def __call__(self, out_sig, ref_sig, initial_sr, target_sr):
+    def __call__(self, out_sig, ref_sig, target_sr, initial_sr):
         """
         Compute LSD (log spectral distance) for low frequencies
         Arguments:
@@ -272,31 +301,37 @@ class LSD_LF(Metric):
             self.current_mode = "4_16"
         else:
             self.current_mode = "default"
-        self.results[self.current_mode] = defaultdict(list)
  
-        out_sig = out_sig.squeeze().cpu()
-        ref_sig = ref_sig.squeeze().cpu()
+        out_sig = out_sig.cpu().squeeze(1)
+        ref_sig = ref_sig.cpu().squeeze(1)
+    
  
         stft = STFTMag(2048, 512)
         hf = int(1025 * (initial_sr / target_sr))
-        sp = torch.log10(stft(ref_sig).square().clamp(1e-8))
-        st = torch.log10(stft(out_sig).square().clamp(1e-8))
-        lsd = (sp[:hf, :] - st[:hf, :]).square().mean(dim=1).sqrt().mean()
-        lsd = lsd.cpu().numpy()
+        
+        batch_size = out_sig.shape[0]
+        lsd_lf_list = []
+        
+        for i in range(batch_size):
+            sp = torch.log10(stft(ref_sig[i]).square().clamp(1e-8))
+            st = torch.log10(stft(out_sig[i]).square().clamp(1e-8))
+            
+            lsd_lf_sample = (sp[:hf, :] - st[:hf, :]).square().mean(dim=1).sqrt().mean()
+            lsd_lf_list.append(lsd_lf_sample.item())
  
-        self.results[self.current_mode]["mean"].append(np.mean(lsd))
-        self.results[self.current_mode]["std"].append(np.std(lsd))
+        self.results[self.current_mode]["mean"].append(np.mean(lsd_lf_list))
+        self.results[self.current_mode]["std"].append(np.std(lsd_lf_list))
  
-        return np.mean(lsd)
- 
- 
+        return np.mean(lsd_lf_list)
+    
+
 class LSD_HF(Metric):
     name = "LSD_HF"
  
     def better(self, first, second):
         return first < second
  
-    def __call__(self, out_sig, ref_sig, initial_sr, target_sr):
+    def __call__(self, out_sig, ref_sig, target_sr, initial_sr):
         """
         Compute LSD (log spectral distance) for high frequencies
         Arguments:
@@ -313,23 +348,28 @@ class LSD_HF(Metric):
             self.current_mode = "4_16"
         else:
             self.current_mode = "default"
-        self.results[self.current_mode] = defaultdict(list)
  
-        out_sig = out_sig.squeeze().cpu()
-        ref_sig = ref_sig.squeeze().cpu()
- 
+        out_sig = out_sig.cpu().squeeze(1)
+        ref_sig = ref_sig.cpu().squeeze(1)
+
         stft = STFTMag(2048, 512)
         hf = int(1025 * (initial_sr / target_sr))
-        sp = torch.log10(stft(ref_sig).square().clamp(1e-8))
-        st = torch.log10(stft(out_sig).square().clamp(1e-8))
-        lsd_hf = (sp[hf:, :] - st[hf:, :]).square().mean(dim=1).sqrt().mean()
-        lsd_hf = lsd_hf.cpu().numpy()
+        
+        batch_size = out_sig.shape[0]
+        lsd_hf_list = []
+        
+        for i in range(batch_size):
+            sp = torch.log10(stft(ref_sig[i]).square().clamp(1e-8))
+            st = torch.log10(stft(out_sig[i]).square().clamp(1e-8))
+            
+            lsd_hf_sample = (sp[hf:, :] - st[hf:, :]).square().mean(dim=1).sqrt().mean()
+            lsd_hf_list.append(lsd_hf_sample.item())
+        
+        
+        self.results[self.current_mode]["mean"].append(np.mean(lsd_hf_list))
+        self.results[self.current_mode]["std"].append(np.std(lsd_hf_list))
  
-        self.results[self.current_mode]["mean"].append(np.mean(lsd_hf))
-        self.results[self.current_mode]["std"].append(np.std(lsd_hf))
- 
-        return np.mean(lsd_hf)
- 
+        return np.mean(lsd_hf_list) 
  
 class STOI(Metric):
     name = "STOI"
@@ -344,8 +384,8 @@ class STOI(Metric):
     def __call__(self, samples, real_samples, target_sr, initial_sr=None):
         super().__call__(samples, real_samples, target_sr, initial_sr)
  
-        real_samples = real_samples.squeeze().cpu().numpy()
-        samples = samples.squeeze().cpu().numpy()
+        real_samples = real_samples.squeeze(1).cpu().numpy()
+        samples = samples.squeeze(1).cpu().numpy()
         if real_samples.ndim == 1:
             real_samples = real_samples[None]
             samples = samples[None]
@@ -376,8 +416,8 @@ class PESQ(Metric):
  
         samples /= samples.abs().max(-1, keepdim=True)[0]
         real_samples /= real_samples.abs().max(-1, keepdim=True)[0]
-        real_samples = real_samples.squeeze().cpu().numpy()
-        samples = samples.squeeze().cpu().numpy()
+        real_samples = real_samples.squeeze(1).cpu().numpy()
+        samples = samples.squeeze(1).cpu().numpy()
         if real_samples.ndim == 1:
             real_samples = real_samples[None]
             samples = samples[None]
@@ -409,8 +449,8 @@ class CSEMetric(Metric):
  
         samples /= samples.abs().max(-1, keepdim=True)[0]
         real_samples /= real_samples.abs().max(-1, keepdim=True)[0]
-        real_samples = real_samples.squeeze().cpu().numpy()
-        samples = samples.squeeze().cpu().numpy()
+        real_samples = real_samples.squeeze(1).cpu().numpy()
+        samples = samples.squeeze(1).cpu().numpy()
         if real_samples.ndim == 1:
             real_samples = real_samples[None]
             samples = samples[None]
@@ -450,38 +490,15 @@ class COVL(CSEMetric):
         self.func = lambda x, y, target_sr: composite_eval(x, y, target_sr)["covl"]
  
  
-def calculate_all_metrics(wavs, reference_wavs, metrics, initial_sr, target_sr, n_max_files=None):
-    mode_key = f"{initial_sr // 1000}_{target_sr // 1000}"
-    for metric in metrics:
-        if metric.results[mode_key] is None or not isinstance(metric.results[mode_key], defaultdict):
-            metric.results[mode_key] = defaultdict(list)
-
+def calculate_all_metrics(wavs, reference_wavs, metrics, initial_sr, target_sr):
     scores = {}
-    for x, y in tqdm(
-        itertools.islice(zip(wavs, reference_wavs), n_max_files),
-        total=n_max_files if n_max_files is not None else len(wavs),
-        desc="Calculating metrics",
-    ):
-        x = x.detach().cpu().numpy()
-        y = y.detach().cpu().numpy()
-        x = x[0, :]
-        y = y[0, :]
-        x = librosa.util.normalize(x[: min(len(x), len(y))])
-        y = librosa.util.normalize(y[: min(len(x), len(y))])
-        x = torch.from_numpy(x)[None, None]
-        y = torch.from_numpy(y)[None, None]
-        for metric in metrics:
-            if "LSD_HF" in metric.name or "LSD_LF" in metric.name:
-                metric.__call__(x, y, initial_sr, target_sr)
-            else:
-                metric.__call__(x, y, target_sr, initial_sr)
+    for metric in metrics:
+        metric.__call__(wavs, reference_wavs, target_sr, initial_sr)
  
     for metric in metrics:
         results = metric.get_result(f"{initial_sr // 1000}_{target_sr // 1000}")
- 
-        if results["mean"]:
-            mean_val = np.mean(results["mean"])
-            std_val = np.std(results["mean"]) if len(results["mean"]) > 1 else 0
-            scores[metric.name] = (mean_val, std_val)
+        mean_val = results['mean']
+        std_val = results['std']
+        scores[metric.name] = (mean_val, std_val)
  
     return scores

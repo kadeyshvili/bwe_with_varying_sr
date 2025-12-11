@@ -143,11 +143,16 @@ class SignalToNoiseRatio(Metric):
         return first > second
 
     def __call__(self, samples, real_samples):
-        real_samples, samples = real_samples.squeeze(), samples.squeeze()
+        if real_samples.dim() == 3:
+            real_samples = real_samples.squeeze(1)
+        if samples.dim() == 3:
+            samples = samples.squeeze(1)
+        
         if real_samples.dim() == 1:
-            real_samples = real_samples[None]
-            samples = samples[None]
-
+            real_samples = real_samples.unsqueeze(0)
+        if samples.dim() == 1:
+            samples = samples.unsqueeze(0)
+ 
         e_target = real_samples.square().sum(dim=1)
         e_res = (samples - real_samples).square().sum(dim=1)
         snr = 10 * torch.log10(e_target / e_res).cpu().numpy()
@@ -170,11 +175,23 @@ class VGGDistance(Metric):
         return first < second
 
     def __call__(self, samples, real_samples):
-        real_samples = real_samples.squeeze().cpu().numpy()
-        samples = samples.squeeze().cpu().numpy()
+        if real_samples.dim() == 3:
+            real_samples = real_samples.squeeze(1)
+        if samples.dim() == 3:
+            samples = samples.squeeze(1)
+        
+        real_samples = real_samples.cpu().numpy()
+        samples = samples.cpu().numpy()
+        
+        if real_samples.ndim == 1:
+            real_samples = real_samples[None]
+        if samples.ndim == 1:
+            samples = samples[None]
+        
         assert (
             samples.shape[1] >= 16384
-        ), "too small segment size, everything will fall in this function"
+        ), f"too small segment size {samples.shape[1]}, need at least 16384 samples"
+        
         real_embs, fake_embs = [], []
         for real_s, fake_s in zip(real_samples, samples):
             real_embs.append(self.model(real_s, self.sr))
@@ -217,16 +234,21 @@ class LSD(Metric):
             ref_sig: vector (torch.Tensor), reference signal(ground truth) [B,T]
         """
 
-        out_sig = out_sig.squeeze().cpu()
-        ref_sig = ref_sig.squeeze().cpu()
+        out_sig = out_sig.squeeze(1).cpu()
+        ref_sig = ref_sig.squeeze(1).cpu()
 
         stft = STFTMag(2048, 512)
-        sp = torch.log10(stft(ref_sig).square().clamp(1e-8))
-        st = torch.log10(stft(out_sig).square().clamp(1e-8))   
-        lsd = (sp - st).square().mean(dim=1).sqrt().mean()
-        lsd = lsd.cpu().numpy()
-        self.result["mean"].append(np.mean(lsd))
-        self.result["std"].append(np.std(lsd))
+        batch_size = out_sig.shape[0]
+        lsd_list = []
+        
+        for i in range(batch_size):
+            sp = torch.log10(stft(ref_sig[i]).square().clamp(1e-8))
+            st = torch.log10(stft(out_sig[i]).square().clamp(1e-8))
+            lsd_sample = (sp - st).square().mean(dim=1).sqrt().mean()
+            lsd_list.append(lsd_sample.item())
+
+        self.result["mean"].append(np.mean(lsd_list))
+        self.result["std"].append(np.std(lsd_list))
 
 
 class LSD_LF(Metric):
@@ -234,7 +256,7 @@ class LSD_LF(Metric):
 
     def better(self, first, second):
         return first < second
-    def __call__(self, out_sig, ref_sig, initial_sr, target_sr):
+    def __call__(self, out_sig, ref_sig, target_sr, initial_sr):
         """
         Compute LSD (log spectral distance)
         Arguments:
@@ -242,17 +264,23 @@ class LSD_LF(Metric):
             ref_sig: vector (torch.Tensor), reference signal(ground truth) [B,T]
         """
 
-        out_sig = out_sig.squeeze().cpu()
-        ref_sig = ref_sig.squeeze().cpu()
+        out_sig = out_sig.squeeze(1).cpu()
+        ref_sig = ref_sig.squeeze(1).cpu()
 
         stft = STFTMag(2048, 512)
         hf = int(1025 * (initial_sr / target_sr))
-        sp = torch.log10(stft(ref_sig).square().clamp(1e-8))
-        st = torch.log10(stft(out_sig).square().clamp(1e-8))
-        lsd = (sp[:hf,:] - st[:hf,:]).square().mean(dim=1).sqrt().mean()
-        lsd = lsd.cpu().numpy()
-        self.result["mean"].append(np.mean(lsd))
-        self.result["std"].append(np.std(lsd))
+        batch_size = out_sig.shape[0]
+        lsd_lf_list = []
+        
+        for i in range(batch_size):
+            sp = torch.log10(stft(ref_sig[i]).square().clamp(1e-8))
+            st = torch.log10(stft(out_sig[i]).square().clamp(1e-8))
+            
+            lsd_lf_sample = (sp[:hf, :] - st[:hf, :]).square().mean(dim=1).sqrt().mean()
+            lsd_lf_list.append(lsd_lf_sample.item())
+ 
+        self.result["mean"].append(np.mean(lsd_lf_list))
+        self.result["std"].append(np.std(lsd_lf_list))
 
 
 
@@ -261,7 +289,7 @@ class LSD_HF(Metric):
 
     def better(self, first, second):
         return first < second
-    def __call__(self, out_sig, ref_sig, initial_sr, target_sr):
+    def __call__(self, out_sig, ref_sig, target_sr, initial_sr):
         """
         Compute LSD (log spectral distance)
         Arguments:
@@ -269,17 +297,22 @@ class LSD_HF(Metric):
             ref_sig: vector (torch.Tensor), reference signal(ground truth) [B,T]
         """
 
-        out_sig = out_sig.squeeze().cpu()
-        ref_sig = ref_sig.squeeze().cpu()
+        out_sig = out_sig.squeeze(1).cpu()
+        ref_sig = ref_sig.squeeze(1).cpu()
 
         stft = STFTMag(2048, 512)
         hf = int(1025 * (initial_sr / target_sr))
-        sp = torch.log10(stft(ref_sig).square().clamp(1e-8))
-        st = torch.log10(stft(out_sig).square().clamp(1e-8))
-        lsd_hf = (sp[hf:,:] - st[hf:,:]).square().mean(dim=1).sqrt().mean()
-        lsd_hf = lsd_hf.cpu().numpy()
-        self.result["mean"].append(np.mean(lsd_hf))
-        self.result["std"].append(np.std(lsd_hf))
+        batch_size = out_sig.shape[0]
+        lsd_hf_list = []
+        
+        for i in range(batch_size):
+            sp = torch.log10(stft(ref_sig[i]).square().clamp(1e-8))
+            st = torch.log10(stft(out_sig[i]).square().clamp(1e-8))
+            
+            lsd_hf_sample = (sp[hf:, :] - st[hf:, :]).square().mean(dim=1).sqrt().mean()
+            lsd_hf_list.append(lsd_hf_sample.item())
+        self.result["mean"].append(np.mean(lsd_hf_list))
+        self.result["std"].append(np.std(lsd_hf_list))
 
 
 class STOI(Metric):
@@ -320,8 +353,8 @@ class PESQ(Metric):
     def __call__(self, samples, real_samples):
         samples /= samples.abs().max(-1, keepdim=True)[0]
         real_samples /= real_samples.abs().max(-1, keepdim=True)[0]
-        real_samples = real_samples.squeeze().cpu().numpy()
-        samples = samples.squeeze().cpu().numpy()
+        real_samples = real_samples.squeeze(1).cpu().numpy()
+        samples = samples.squeeze(1).cpu().numpy()
         if real_samples.ndim == 1:
             real_samples = real_samples[None]
             samples = samples[None]
@@ -350,8 +383,8 @@ class CSEMetric(Metric):
     def __call__(self, samples, real_samples):
         samples /= samples.abs().max(-1, keepdim=True)[0]
         real_samples /= real_samples.abs().max(-1, keepdim=True)[0]
-        real_samples = real_samples.squeeze().cpu().numpy()
-        samples = samples.squeeze().cpu().numpy()
+        real_samples = real_samples.squeeze(1).cpu().numpy()
+        samples = samples.squeeze(1).cpu().numpy()
         if real_samples.ndim == 1:
             real_samples = real_samples[None]
             samples = samples[None]
@@ -392,28 +425,16 @@ class COVL(CSEMetric):
         self.func = lambda x, y: composite_eval(x, y)["covl"]
 
 
-def calculate_all_metrics(wavs, reference_wavs, metrics, initial_sr, target_sr,  n_max_files=None):
-    scores = {metric.name: [] for metric in metrics}
-    for x, y in tqdm(
-        itertools.islice(zip(wavs, reference_wavs), n_max_files),
-        total=n_max_files if n_max_files is not None else len(wavs),
-        desc="Calculating metrics",
-    ):
-        x = x.detach().cpu().numpy()
-        y = y.detach().cpu().numpy()
-        x = x[0, :]
-        y = y[0, :]
-        x = librosa.util.normalize(x[: min(len(x), len(y))])
-        y = librosa.util.normalize(y[: min(len(x), len(y))])
-        x = torch.from_numpy(x)[None, None]
-        y = torch.from_numpy(y)[None, None]
-        for metric in metrics:
-            if metric.name=='LSD_LF' or metric.name=='LSD_HF':
-                metric.__call__(x, y, initial_sr, target_sr)
-            else:
-                metric.__call__(x, y)
-            scores[metric.name] += [np.mean(metric.result["mean"])]
-    scores = {k: (np.mean(v), np.std(v)) for k, v in scores.items()}
+def calculate_all_metrics(wavs, reference_wavs, metrics, initial_sr, target_sr):
+    scores = {}
+    for metric in metrics:
+        if metric.name=='LSD_LF' or metric.name=='LSD_HF':
+            metric.__call__(wavs, reference_wavs, target_sr, initial_sr)
+        else:
+            metric.__call__(wavs, reference_wavs)
+    for metric in metrics:
+        results = metric.result
+        mean_val = results['mean']
+        std_val = results['std']
+        scores[metric.name] = (mean_val, std_val)
     return scores
-
-

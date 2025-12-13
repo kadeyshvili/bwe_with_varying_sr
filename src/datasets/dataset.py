@@ -126,7 +126,6 @@ class VCTKDataset(Dataset):
             "path_hr": vctk_fn_hr,
             "melspec_lr": melspec_lr, 
             "melspec_hr": melspec_hr,
-            "mode": self.current_mode,
             "initial_sr": self.initial_sr,
             "target_sr": self.target_sr,
             'mode':self.mode, 

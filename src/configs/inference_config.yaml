@@ -1,6 +1,6 @@
 defaults:
   - model: model
-  - metrics: metrics
+  - metrics: test_metrics_4_16
   - datasets: test_dataset
   - dataloader: test_loader
   - _self_
@@ -9,4 +9,4 @@ inferencer:
   device: auto
   save_path: "inference_dir"
   seed: 1
-  from_pretrained: "/Users/polinakadeyshvili/AMI/4_course/diplom/hifi++_dla/saved_dir/nw_block/model_best.pth"
+  from_pretrained: "/Users/polinakadeyshvili/AMI/4_course/diplom/varying_sr/saved_dir/train_3_regimes_new_metrics/model_best.pth"

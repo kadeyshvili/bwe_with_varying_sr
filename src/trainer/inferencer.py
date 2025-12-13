@@ -7,6 +7,8 @@ import numpy as np
 import torchaudio
 from pathlib import Path
 from src.metrics.calculate_metrics import calculate_all_metrics
+import torch.nn.functional as F
+
 
 
 class Inferencer(BaseTrainer):
@@ -120,6 +122,10 @@ class Inferencer(BaseTrainer):
         initial_sr = self.config.datasets.test.initial_sr
         target_sr = self.config.datasets.test.target_sr
         generated_wavs = self.model.generator(initial_wav, initial_sr, target_sr, **batch)
+
+        if batch['wav_hr'].shape != generated_wavs.shape:
+            generated_wavs = torch.stack([F.pad(wav, (0, batch['wav_hr'].shape[2] - generated_wavs.shape[2]), value=0) for wav in generated_wavs])
+
         batch['generated_wav'] = generated_wavs
 
 

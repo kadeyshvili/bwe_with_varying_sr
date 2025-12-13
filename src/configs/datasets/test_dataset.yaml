@@ -7,5 +7,5 @@ test:
   target_sr: 16000
   segment_size: 32768
   device: ${inferencer.device}
-  split: True
+  split: False
   mode: 'test'

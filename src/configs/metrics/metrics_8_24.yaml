@@ -1,0 +1,28 @@
+train: []
+inference:
+    #8-24
+  - _target_: src.metrics.MOSNet
+    name: "MOS_8_24"
+    sr: 24000
+  - _target_: src.metrics.ScaleInvariantSignalToDistortionRatio
+    name: "SISDR_8_24"
+  - _target_: src.metrics.SignalToNoiseRatio
+    name: "SNR_8_24"
+  - _target_: src.metrics.LSD
+    name: "LSD_8_24"
+  - _target_: src.metrics.LSD_LF
+    name: "LSD_LF_8_24"
+  - _target_: src.metrics.LSD_HF
+    name: "LSD_HF_8_24"
+  - _target_: src.metrics.STOI
+    name: "STOI_8_24"
+    sr: 24000
+  - _target_: src.metrics.PESQ
+    name: "PESQ_8_24"
+    sr: 24000
+  - _target_: src.metrics.CSIG
+    name: "CSIG_8_24"
+  - _target_: src.metrics.CBAK
+    name: "CBAK_8_24"
+  - _target_: src.metrics.COVL
+    name: "COVL_8_24"

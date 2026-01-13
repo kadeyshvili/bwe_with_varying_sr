@@ -32,17 +32,34 @@ class VCTKDataset(Dataset):
     def __init__(
         self,
         dataset_split_file,
-        wavs_dir_4khz,
-        wavs_dir_8khz,
-        wavs_dir_16khz,
+        wavs_dir_4khz=None,
+        wavs_dir_8khz=None,
+        wavs_dir_16khz=None,
+        wavs_dir_24khz=None,
         segment_size=8192,
         split=True,
         mode='train',
         device=None,
     ):
-        self.audio_files_4k = get_dataset_filelist(dataset_split_file, wavs_dir_4khz)
-        self.audio_files_8k = get_dataset_filelist(dataset_split_file, wavs_dir_8khz)
-        self.audio_files_16k = get_dataset_filelist(dataset_split_file, wavs_dir_16khz)
+        if wavs_dir_4khz is not None: 
+            self.audio_files_4k = get_dataset_filelist(dataset_split_file, wavs_dir_4khz)
+        else:
+            self.audio_files_4k  = None
+
+        if wavs_dir_8khz is not None: 
+            self.audio_files_8k = get_dataset_filelist(dataset_split_file, wavs_dir_8khz)
+        else:
+            self.audio_files_8k  = None
+
+        if wavs_dir_16khz is not None: 
+            self.audio_files_16k = get_dataset_filelist(dataset_split_file, wavs_dir_16khz)
+        else:
+            self.audio_files_16k  = None
+
+        if wavs_dir_24khz is not None:
+            self.audio_files_24k = get_dataset_filelist(dataset_split_file, wavs_dir_24khz)
+        else:
+            self.audio_files_24k  = None
         
         random.seed(1234)
         self.mode = mode
@@ -50,48 +67,109 @@ class VCTKDataset(Dataset):
         self.split = split
         self.device = device
         
-        self.current_mode = "8_16"  
-        
-        self.mel_creator_4k = MelSpectrogram(sr=4000)
-        self.mel_creator_8k = MelSpectrogram(sr=8000)
-        self.mel_creator_16k = MelSpectrogram(sr=16000)
+        if self.audio_files_8k is not None and self.audio_files_16k is not None:
+            self.current_mode = "8_16"
+            self.audio_files_lr = self.audio_files_8k
+            self.audio_files_hr = self.audio_files_16k
 
-        self.set_batch_mode(self.current_mode)
+        elif self.audio_files_8k is not None and self.audio_files_24k is not None:
+            self.current_mode = "8_24"
+            self.audio_files_lr = self.audio_files_8k
+            self.audio_files_hr = self.audio_files_24k
+
+        elif self.audio_files_4k is not None and self.audio_files_8k is not None:
+            self.current_mode = "4_8"
+            self.audio_files_lr = self.audio_files_4k
+            self.audio_files_hr = self.audio_files_8k
+
+        elif self.audio_files_4k is not None and self.audio_files_16k is not None:
+            self.current_mode = "4_16"
+            self.audio_files_lr = self.audio_files_4k
+            self.audio_files_hr = self.audio_files_16k
+            
+        elif self.audio_files_4k is not None and self.audio_files_24k is not None:
+            self.current_mode = "4_24"
+            self.audio_files_lr = self.audio_files_4k
+            self.audio_files_hr = self.audio_files_24k
+        
+        self.mel_creator_4k = MelSpectrogram(sr=4000) if wavs_dir_4khz is not None else None
+        self.mel_creator_8k = MelSpectrogram(sr=8000) if wavs_dir_8khz is not None else None
+        self.mel_creator_16k = MelSpectrogram(sr=16000) if wavs_dir_16khz is not None else None
+        self.mel_creator_24k = MelSpectrogram(sr=24000) if wavs_dir_24khz is not None else None
+
+
+        if self.current_mode is not None:
+            self.set_batch_mode(self.current_mode)
+
         
     def set_batch_mode(self, mode=None):
         if mode is not None:
             self.current_mode = mode
         else:
-            mode_choice = random.random()
-            if mode_choice < 0.33:
-                self.current_mode = "4_8"
-            elif mode_choice < 0.67:
-                self.current_mode = "8_16"
-            else:
-                self.current_mode = "4_16"
-                
-        if self.current_mode == "4_8":
-            self.audio_files_lr = self.audio_files_4k
-            self.audio_files_hr = self.audio_files_8k
-            self.initial_sr = 4000
-            self.target_sr = 8000
-            self.mel_creator_lr = self.mel_creator_4k
-            self.mel_creator_hr = self.mel_creator_8k
-        elif self.current_mode == "8_16": 
-            self.audio_files_lr = self.audio_files_8k
-            self.audio_files_hr = self.audio_files_16k
-            self.initial_sr = 8000
-            self.target_sr = 16000
-            self.mel_creator_lr = self.mel_creator_8k
-            self.mel_creator_hr = self.mel_creator_16k
-        elif self.current_mode == "4_16":
-            self.audio_files_lr = self.audio_files_4k
-            self.audio_files_hr = self.audio_files_16k
-            self.initial_sr = 4000
-            self.target_sr = 16000
-            self.mel_creator_lr = self.mel_creator_4k
-            self.mel_creator_hr = self.mel_creator_16k
+            available_modes = self._get_available_modes()
+            if not available_modes:
+                raise ValueError("No valid modes available. Please provide at least one pair of sample rate directories.")
+            self.current_mode = random.choice(available_modes)
+
+        available_modes = self._get_available_modes()
+        if self.current_mode not in available_modes:
+            raise ValueError(
+                f"Requested mode '{self.current_mode}' is not available. "
+                f"Available modes: {available_modes}. "
+                f"Please provide the corresponding wavs_dir parameters."
+            )
+        
+        parts = self.current_mode.split('_')
+        if len(parts) == 2:
+            initial_sr = int(parts[0]) * 1000
+            target_sr = int(parts[1]) * 1000
+        else:
+            raise ValueError(f"Invalid mode format: {self.current_mode}. Expected format: 'initial_target' (e.g., '4_8')")
+        
+        sr_to_files = {}
+        
+        if self.audio_files_4k is not None and self.mel_creator_4k is not None:
+            sr_to_files[4000] = (self.audio_files_4k, self.mel_creator_4k)
+        if self.audio_files_8k is not None and self.mel_creator_8k is not None:
+            sr_to_files[8000] = (self.audio_files_8k, self.mel_creator_8k)
+        if self.audio_files_16k is not None and self.mel_creator_16k is not None:
+            sr_to_files[16000] = (self.audio_files_16k, self.mel_creator_16k)
+        if self.audio_files_24k is not None and self.mel_creator_24k is not None:
+            sr_to_files[24000] = (self.audio_files_24k, self.mel_creator_24k)
+        
+        if initial_sr not in sr_to_files:
+            available_srs = list(sr_to_files.keys())
+            raise ValueError(
+                f"Unsupported initial_sr: {initial_sr}. Available sample rates: {available_srs}. "
+                f"Please provide the corresponding wavs_dir parameter."
+            )
+        if target_sr not in sr_to_files:
+            available_srs = list(sr_to_files.keys())
+            raise ValueError(
+                f"Unsupported target_sr: {target_sr}. Available sample rates: {available_srs}. "
+                f"Please provide the corresponding wavs_dir parameter."
+            )
+        
+        self.audio_files_lr, self.mel_creator_lr = sr_to_files[initial_sr]
+        self.audio_files_hr, self.mel_creator_hr = sr_to_files[target_sr]
+        self.initial_sr = initial_sr
+        self.target_sr = target_sr
+        
         return self.current_mode
+    
+    def _get_available_modes(self):
+        available_modes = []
+        if self.audio_files_4k is not None and self.audio_files_8k is not None:
+            available_modes.append("4_8")
+        if self.audio_files_8k is not None and self.audio_files_16k is not None:
+            available_modes.append("8_16")
+        if self.audio_files_4k is not None and self.audio_files_16k is not None:
+            available_modes.append("4_16")
+        if self.audio_files_8k is not None and self.audio_files_24k is not None:
+            available_modes.append("8_24")
+        if self.audio_files_4k is not None and self.audio_files_24k is not None:
+            available_modes.append("4_24")
+        return available_modes
         
     def __getitem__(self, index_and_mode):
         index, cur_mode = index_and_mode
@@ -133,54 +211,94 @@ class VCTKDataset(Dataset):
         }
 
     def __len__(self):
-        return len(self.audio_files_lr)
+        if self.audio_files_4k is not None:
+            return len(self.audio_files_4k)
+        elif self.audio_files_8k is not None:
+            return len(self.audio_files_8k)
+        elif self.audio_files_16k is not None:
+            return len(self.audio_files_16k)
+        elif self.audio_files_24k is not None:
+            return len(self.audio_files_24k)
+        else:
+            raise ValueError("No audio files directories provided.")
 
 
 class SRConsistentBatchSampler(torch.utils.data.Sampler):
-    def __init__(self, dataset, batch_size):
+    def __init__(self, dataset, batch_size, regimes=None):
         self.dataset = dataset
         self.batch_size = batch_size
+        
+        if regimes is not None:
+            self.regimes = regimes
+        else:
+            self.regimes = self._get_available_regimes()
+        
+        available_regimes = self._get_available_regimes()
+        invalid_regimes = [r for r in self.regimes if r not in available_regimes]
+        if invalid_regimes:
+            raise ValueError(
+                f"Requested regimes {invalid_regimes} are not available. "
+                f"Available regimes: {available_regimes}. "
+                f"Please provide the corresponding wavs_dir parameters."
+            )
+    
+    def _get_available_regimes(self):
+        available_regimes = []
+        
+        if self.dataset.audio_files_4k is not None and self.dataset.audio_files_8k is not None:
+            available_regimes.append("4_8")
+        if self.dataset.audio_files_8k is not None and self.dataset.audio_files_16k is not None:
+            available_regimes.append("8_16")
+        if self.dataset.audio_files_4k is not None and self.dataset.audio_files_16k is not None:
+            available_regimes.append("4_16")
+        if self.dataset.audio_files_8k is not None and self.dataset.audio_files_24k is not None:
+            available_regimes.append("8_24")
+        if self.dataset.audio_files_4k is not None and self.dataset.audio_files_24k is not None:
+            available_regimes.append("4_24")
+        
+        return available_regimes
         
     def __iter__(self):
         indices = list(range(len(self.dataset)))
         random.shuffle(indices)
     
-        third_len = len(indices) // 3
-        indices_4_8 = indices[:third_len]
-        indices_8_16 = indices[third_len:2*third_len]
-        indices_4_16 = indices[2*third_len:]
+        num_regimes = len(self.regimes)
+        regime_len = len(indices) // num_regimes
         
-        mode_4_8_batches = []
-        mode_8_16_batches = []
-        mode_4_16_batches = []
-        for i in range(0, len(indices_4_8), self.batch_size):
-            batch = [(indices_4_8[j], '4_8') for j in range(i, min(i + self.batch_size, len(indices_4_8)))]
-            mode_4_8_batches.append(batch)
+        regime_indices = {}
+        regime_batches = {}
         
-        for i in range(0, len(indices_8_16), self.batch_size):
-            batch = [(indices_8_16[j], '8_16') for j in range(i, min(i + self.batch_size, len(indices_8_16)))]
-            mode_8_16_batches.append(batch)
-        
-        for i in range(0, len(indices_4_16), self.batch_size):
-            batch = [(indices_4_16[j], '4_16') for j in range(i, min(i + self.batch_size, len(indices_4_16)))]
-            mode_4_16_batches.append(batch)
+        for i, regime in enumerate(self.regimes):
+            start_idx = i * regime_len
+            end_idx = start_idx + regime_len if i < num_regimes - 1 else len(indices)
+            regime_indices[regime] = indices[start_idx:end_idx]
+            regime_batches[regime] = []
+            
+            for j in range(0, len(regime_indices[regime]), self.batch_size):
+                batch = [(regime_indices[regime][k], regime) 
+                        for k in range(j, min(j + self.batch_size, len(regime_indices[regime])))]
+                regime_batches[regime].append(batch)
         
         interleaved_batches = []
-        max_batches = max(len(mode_4_8_batches), len(mode_8_16_batches), len(mode_4_16_batches))
+        max_batches = max(len(batches) for batches in regime_batches.values())
         
         for i in range(max_batches):
-            if i < len(mode_4_8_batches):
-                interleaved_batches.append(mode_4_8_batches[i])
-            if i < len(mode_8_16_batches):
-                interleaved_batches.append(mode_8_16_batches[i])
-            if i < len(mode_4_16_batches):
-                interleaved_batches.append(mode_4_16_batches[i])
+            for regime in self.regimes:
+                if i < len(regime_batches[regime]):
+                    interleaved_batches.append(regime_batches[regime][i])
         
         return iter(interleaved_batches)
     
     def __len__(self):
-        third_len = len(self.dataset) // 3
-        total_4_8 = (third_len + self.batch_size - 1) // self.batch_size
-        total_8_16 = (third_len + self.batch_size - 1) // self.batch_size
-        total_4_16 = ((len(self.dataset) - 2*third_len) + self.batch_size - 1) // self.batch_size
-        return total_4_8 + total_8_16 + total_4_16
+        num_regimes = len(self.regimes)
+        regime_len = len(self.dataset) // num_regimes
+        
+        total = 0
+        for i in range(num_regimes):
+            if i < num_regimes - 1:
+                regime_size = regime_len
+            else:
+                regime_size = len(self.dataset) - (num_regimes - 1) * regime_len
+            total += (regime_size + self.batch_size - 1) // self.batch_size
+        
+        return total

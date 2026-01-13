@@ -4,6 +4,8 @@ from src.metrics.tracker import MetricTracker
 from src.trainer.base_trainer import BaseTrainer
 import torch.nn.functional as F
 from src.model import HiFiGANWithMRF
+from src.model.melspec import MelSpectrogram
+from src.utils.sr_utils import get_sr_ratio, get_regime_key
 from hydra.utils import instantiate
 
 
@@ -47,12 +49,9 @@ class Trainer(BaseTrainer):
         if target_wav.shape != wav_fake.shape:
             wav_fake = torch.stack([F.pad(wav, (0, target_wav.shape[2] - wav_fake.shape[2]), value=0) for wav in wav_fake])
         batch["generated_wav"] = wav_fake
-        if initial_sr==4000 and target_sr==8000:
-            mel_spec_fake = self.create_mel_spec_4_8(wav_fake).squeeze(1)
-        elif initial_sr==8000 and target_sr == 16000:
-            mel_spec_fake = self.create_mel_spec_8_16(wav_fake).squeeze(1)
-        elif initial_sr==4000 and target_sr==16000:
-            mel_spec_fake = self.create_mel_spec(wav_fake).squeeze(1)
+        
+        mel_spec_creator = MelSpectrogram(sr=target_sr).to(self.device)
+        mel_spec_fake = mel_spec_creator(wav_fake).squeeze(1)
         batch['mel_spec_fake'] = mel_spec_fake
         if self.is_train:
             self.disc_optimizer.zero_grad()
@@ -64,12 +63,13 @@ class Trainer(BaseTrainer):
         batch['mpd_fake_out'] = mpd_fake_out
         batch['msd_gt_out'] = msd_gt_out
         batch['msd_fake_out'] = msd_fake_out
-        if initial_sr==8000 and target_sr == 16000:
-            mpd_disc_loss_8_16, msd_disc_loss_8_16, disc_loss_8_16 = self.criterion.discriminator_loss_8_16(batch)
-        elif initial_sr == 4000 and target_sr == 8000:
-            mpd_disc_loss_4_8, msd_disc_loss_4_8, disc_loss_4_8 = self.criterion.discriminator_loss_4_8(batch)
-        elif initial_sr == 4000 and target_sr == 16000:
+        
+        ratio = get_sr_ratio(initial_sr, target_sr)
+        if ratio < 4:
+            mpd_disc_loss, msd_disc_loss, disc_loss = self.criterion.discriminator_loss_ratio_2(batch)
+        else:
             mpd_disc_loss, msd_disc_loss, disc_loss = self.criterion.discriminator_loss(batch)
+        
 
 
 
@@ -78,12 +78,7 @@ class Trainer(BaseTrainer):
             self._clip_grad_norm(self.model.msd)
 
         if self.is_train:
-            if initial_sr==8000 and target_sr == 16000:
-                disc_loss_8_16.backward()
-            elif initial_sr == 4000 and target_sr == 8000:
-                disc_loss_4_8.backward()
-            elif initial_sr == 4000 and target_sr == 16000:
-                disc_loss.backward()
+            disc_loss.backward()
             self.disc_optimizer.step()
             self.gen_optimizer.zero_grad()
 
@@ -98,74 +93,40 @@ class Trainer(BaseTrainer):
         batch["msd_fake_feats"] = msd_fake_feats
         batch["msd_gt_feats"] = msd_gt_feats
 
-        if initial_sr==8000 and target_sr == 16000:
-            target_melspec = self.create_mel_spec_8_16(target_wav.squeeze(1))
-            batch['mel_spec_hr'] = target_melspec
-            mpd_gen_loss_8_16, msd_gen_loss_8_16,\
-                mpd_feats_gen_loss_8_16, msd_feats_gen_loss_8_16,\
-                mel_spec_loss_8_16, gen_loss_8_16 =\
-                    self.criterion.generator_loss_8_16(batch)
-
-        elif initial_sr == 4000 and target_sr == 8000:
-            target_melspec = self.create_mel_spec_4_8(target_wav.squeeze(1))
-            batch['mel_spec_hr'] = target_melspec
-
-            mpd_gen_loss_4_8, msd_gen_loss_4_8,\
-                mpd_feats_gen_loss_4_8, msd_feats_gen_loss_4_8,\
-                mel_spec_loss_4_8, gen_loss_4_8 =\
-                    self.criterion.generator_loss_4_8(batch)
-            
-        elif initial_sr == 4000 and target_sr == 16000:
-            target_melspec = self.create_mel_spec(target_wav.squeeze(1))
-            batch['mel_spec_hr'] = target_melspec
-
+        target_mel_spec_creator = MelSpectrogram(sr=target_sr).to(self.device)
+        target_melspec = target_mel_spec_creator(target_wav.squeeze(1))
+        batch['mel_spec_hr'] = target_melspec
+        
+        ratio = get_sr_ratio(initial_sr, target_sr)
+        if ratio < 4:
+            mpd_gen_loss, msd_gen_loss,\
+                mpd_feats_gen_loss, msd_feats_gen_loss,\
+                mel_spec_loss, gen_loss =\
+                    self.criterion.generator_loss_ratio_2(batch)
+        elif ratio == 4:
             mpd_gen_loss, msd_gen_loss,\
                 mpd_feats_gen_loss, msd_feats_gen_loss,\
                 mel_spec_loss, gen_loss =\
                     self.criterion.generator_loss(batch)
+        else:
+            raise ValueError(f"Unsupported ratio: {ratio}")
 
         if self.is_train:
             self._clip_grad_norm(self.model.generator)
-            if initial_sr==8000 and target_sr == 16000:
-                gen_loss_8_16.backward()
-            elif initial_sr == 4000 and target_sr == 8000:
-                gen_loss_4_8.backward()
-            elif initial_sr == 4000 and target_sr == 16000:
-                gen_loss.backward()
+            gen_loss.backward()
             self.gen_optimizer.step()
 
-        if initial_sr == 8000 and target_sr==16000:
-            batch["disc_loss_8_16"] = disc_loss_8_16
-            batch["mpd_gen_loss_8_16"] = mpd_gen_loss_8_16
-            batch["msd_gen_loss_8_16"] = msd_gen_loss_8_16
-            batch["mel_spec_loss_8_16"] = mel_spec_loss_8_16
-            batch["mpd_disc_loss_8_16"] = mpd_disc_loss_8_16
-            batch["msd_disc_loss_8_16"] = msd_disc_loss_8_16
-            batch["mpd_feats_gen_loss_8_16"] = mpd_feats_gen_loss_8_16
-            batch["msd_feats_gen_loss_8_16"] = msd_feats_gen_loss_8_16
-            batch["gen_loss_8_16"] = gen_loss_8_16
-                
-        elif initial_sr==4000 and target_sr==8000:
-            batch["disc_loss_4_8"] = disc_loss_4_8
-            batch["mpd_gen_loss_4_8"] = mpd_gen_loss_4_8
-            batch["msd_gen_loss_4_8"] = msd_gen_loss_4_8
-            batch["mel_spec_loss_4_8"] = mel_spec_loss_4_8
-            batch["mpd_disc_loss_4_8"] = mpd_disc_loss_4_8
-            batch["msd_disc_loss_4_8"] = msd_disc_loss_4_8
-            batch["mpd_feats_gen_loss_4_8"] = mpd_feats_gen_loss_4_8
-            batch["msd_feats_gen_loss_4_8"] = msd_feats_gen_loss_4_8
-            batch["gen_loss_4_8"] = gen_loss_4_8
-
-        elif initial_sr==4000 and target_sr==16000:
-            batch["disc_loss"] = disc_loss
-            batch["mpd_gen_loss"] = mpd_gen_loss
-            batch["msd_gen_loss"] = msd_gen_loss
-            batch["mel_spec_loss"] = mel_spec_loss
-            batch["mpd_disc_loss"] = mpd_disc_loss
-            batch["msd_disc_loss"] = msd_disc_loss
-            batch["mpd_feats_gen_loss"] = mpd_feats_gen_loss
-            batch["msd_feats_gen_loss"] = msd_feats_gen_loss
-            batch["gen_loss"] = gen_loss
+        regime_key = get_regime_key(initial_sr, target_sr)
+        batch[f"disc_loss_{regime_key}"] = disc_loss
+        batch[f"mpd_gen_loss_{regime_key}"] = mpd_gen_loss
+        batch[f"msd_gen_loss_{regime_key}"] = msd_gen_loss
+        batch[f"mel_spec_loss_{regime_key}"] = mel_spec_loss
+        batch[f"mpd_disc_loss_{regime_key}"] = mpd_disc_loss
+        batch[f"msd_disc_loss_{regime_key}"] = msd_disc_loss
+        batch[f"mpd_feats_gen_loss_{regime_key}"] = mpd_feats_gen_loss
+        batch[f"msd_feats_gen_loss_{regime_key}"] = msd_feats_gen_loss
+        batch[f"gen_loss_{regime_key}"] = gen_loss
+        
 
         for loss_name in self.config.writer.loss_names:
             if loss_name in batch.keys():
@@ -189,28 +150,19 @@ class Trainer(BaseTrainer):
 
         # logging scheme might be different for different partitions
         if mode == "train":  # the method is called only every self.log_step steps
-            for regime_key in ["4_8", "8_16", "4_16"]:
+            for regime_key in self.samples_for_logging.keys():
                 samples = self.samples_for_logging.get(regime_key, [])
                 for idx, sample in enumerate(samples[:5]):
                     self.log_spectrogram(partition='train', idx=idx, **sample)
                     self.log_audio(partition='train', idx=idx, **sample)
-            self.samples_for_logging = {
-                "4_8": [],
-                "8_16": [],
-                "4_16": []
-            }
+            self.samples_for_logging = {key: [] for key in self.samples_for_logging.keys()}
         else:
-            for regime_key in ["4_8", "8_16", "4_16"]:
+            for regime_key in self.samples_for_logging.keys():
                 samples = self.samples_for_logging.get(regime_key, [])
                 for idx, sample in enumerate(samples[:5]):
                     self.log_spectrogram(partition='val', idx=idx, **sample)
                     self.log_audio(partition='val', idx=idx, **sample)
-            # Reset samples after logging
-            self.samples_for_logging = {
-                "4_8": [],
-                "8_16": [],
-                "4_16": []
-            }
+            self.samples_for_logging = {key: [] for key in self.samples_for_logging.keys()}
 
 
     def log_audio(self, wav_lr, wav_hr,  generated_wav, partition, idx, **batch):

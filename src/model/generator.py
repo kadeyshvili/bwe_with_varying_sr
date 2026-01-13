@@ -9,7 +9,7 @@ import numpy as np
 import src.utils.upsampling_utils as upsampling_utils
 import librosa
 from src.model.melspec import MelSpectrogram
-
+from src.utils.sr_utils import get_sr_ratio, get_intermediate_sr, create_band_mask, get_num_blocks
 
 
 mel_basis = {}
@@ -116,6 +116,13 @@ class HiFiPlusGenerator(torch.nn.Module):
         self.use_skip_connect = use_skip_connect
         self.upsampling_block1 = upsampling_utils.UpsampleTwice(upsample_init_channels, upsample_block_rates, upsample_block_kernel_sizes)
         self.upsampling_block2 = upsampling_utils.UpsampleTwice(upsample_init_channels, upsample_block_rates, upsample_block_kernel_sizes)
+        self.upsampling_block_x3 = nn.ConvTranspose1d(in_channels=upsample_init_channels,
+            out_channels=upsample_init_channels,
+            kernel_size=9,
+            stride=3,
+            padding=3,
+            output_padding=0
+        )
         self.nw_stack1 = upsampling_utils.NUWaveStack(residual_channels, bsft_channels, n_blocks=nwstack1_blocks)
         self.nw_stack2 = upsampling_utils.NUWaveStack(residual_channels, bsft_channels, n_blocks=nwstack2_blocks)
         if kernel_sizes_mrf is not None:
@@ -363,70 +370,51 @@ class A2AHiFiPlusGenerator(HiFiPlusGenerator):
 
         padded_reference = torch.nn.functional.pad(x_reference, (0, pad_reference_len)).to(x.device)
 
-        resampled_once = []
-        for i in range(batch_size):
-            x_single = padded_x[i].cpu().numpy()
-            x_resampled_once = librosa.resample(
-                x_single, orig_sr=initial_sr, target_sr=target_sr // 2, res_type="polyphase"
-            )
-
-            target_length_once = x_single.shape[-1] * (target_sr // 2 // initial_sr)
-            if len(x_resampled_once) > target_length_once:
-                x_resampled_once = x_resampled_once[:target_length_once]
-            
-            resampled_once.append(x_resampled_once)
-        
-
-        x_half_resampled = np.stack(resampled_once)
-        x_half_resampled = torch.tensor(x_half_resampled, dtype=padded_x.dtype).to(x.device)
-
         upsampled_x = self.upsampling_block1(padded_x)
 
-
-        if initial_sr==4000 and target_sr==16000:
-
-            highcut = initial_sr // 2
-            nyq = 0.5 * target_sr // 2
-            hi = highcut / nyq
-            fft_size = 1024 // 2 + 1
-            band4_8 = torch.zeros(fft_size, dtype=torch.float)
-            band4_8[:int(hi * fft_size)] = 1
-            band4_8 = band4_8.unsqueeze(0).unsqueeze(0) 
-            band4_8 = band4_8.repeat(batch_size, 2, 1).to(upsampled_x.device)
-            x_4_8 = self.nw_stack1(upsampled_x, x_half_resampled, band4_8)
-
-            upsampled_x_4 = self.upsampling_block2(x_4_8)
-            highcut = initial_sr // 2 * 2
-            nyq = 0.5 * target_sr
-            hi = highcut / nyq
-            fft_size = 1024 // 2 + 1
-            band8_16 = torch.zeros(fft_size, dtype=torch.float)
-            band8_16[:int(hi * fft_size)] = 1
-            band8_16 = band8_16.unsqueeze(0).unsqueeze(0) 
-            band8_16 = band8_16.repeat(batch_size, 2, 1).to(upsampled_x.device)
-            x_res = self.nw_stack2(upsampled_x_4, padded_reference, band8_16)
-
-        elif initial_sr==4000 and target_sr==8000:
-            highcut = initial_sr // 2
-            nyq = 0.5 * target_sr // 2
-            hi = highcut / nyq
-            fft_size = 1024 // 2 + 1
-            band4_8 = torch.zeros(fft_size, dtype=torch.float)
-            band4_8[:int(hi * fft_size)] = 1
-            band4_8 = band4_8.unsqueeze(0).unsqueeze(0) 
-            band4_8 = band4_8.repeat(batch_size, 2, 1).to(upsampled_x.device)
-            x_res = self.nw_stack1(upsampled_x, padded_reference, band4_8)
-
-        elif initial_sr==8000 and target_sr==16000:
-            highcut = initial_sr // 2 * 2
-            nyq = 0.5 * target_sr
-            hi = highcut / nyq
-            fft_size = 1024 // 2 + 1
-            band8_16 = torch.zeros(fft_size, dtype=torch.float)
-            band8_16[:int(hi * fft_size)] = 1
-            band8_16 = band8_16.unsqueeze(0).unsqueeze(0) 
-            band8_16 = band8_16.repeat(batch_size, 2, 1).to(upsampled_x.device)
-            x_res = self.nw_stack2(upsampled_x, padded_reference, band8_16)
+        ratio = get_sr_ratio(initial_sr, target_sr)
+        num_blocks = get_num_blocks(initial_sr, target_sr)
+        
+        if ratio == 3:
+            upsampled_x=self.upsampling_block_x3(padded_x)
+        
+        if num_blocks == 1:
+            
+            band_mask = create_band_mask(initial_sr, target_sr, batch_size, upsampled_x.device)
+            x_res = self.nw_stack1(upsampled_x, padded_reference, band_mask)
+            
+        elif num_blocks == 2:
+            intermediate_sr = get_intermediate_sr(initial_sr, target_sr)
+            resampled_intermediate = []
+            for i in range(batch_size):
+                x_single = padded_x[i].cpu().numpy()
+                x_resampled_intermediate = librosa.resample(
+                    x_single, orig_sr=initial_sr, target_sr=intermediate_sr, res_type="polyphase"
+                )
+                target_length_intermediate = x_single.shape[-1] * (intermediate_sr // initial_sr)
+                if len(x_resampled_intermediate) > target_length_intermediate:
+                    x_resampled_intermediate = x_resampled_intermediate[:target_length_intermediate]
+                resampled_intermediate.append(x_resampled_intermediate)
+            
+            x_intermediate_reference = np.stack(resampled_intermediate)
+            x_intermediate_reference = torch.tensor(x_intermediate_reference, dtype=padded_x.dtype).to(x.device)
+            
+            expected_intermediate_len = (closest_size * intermediate_sr) // initial_sr
+            current_intermediate_len = x_intermediate_reference.shape[-1]
+            pad_intermediate_len = expected_intermediate_len - current_intermediate_len
+            padded_intermediate_reference = torch.nn.functional.pad(
+                x_intermediate_reference, (0, pad_intermediate_len)
+            ).to(x.device)
+            
+            band_mask_1 = create_band_mask(initial_sr, intermediate_sr, batch_size, upsampled_x.device)
+            x_intermediate = self.nw_stack1(upsampled_x, padded_intermediate_reference, band_mask_1)
+            
+            upsampled_x_intermediate = self.upsampling_block2(x_intermediate)
+            
+            band_mask_2 = create_band_mask(intermediate_sr, target_sr, batch_size, upsampled_x.device)
+            x_res = self.nw_stack2(upsampled_x_intermediate, padded_reference, band_mask_2)
+        else:
+            raise ValueError(f"Unsupported number of blocks: {num_blocks}. Only 1 or 2 blocks are supported.")
 
 
         x_res = self.get_stft(x_res, sampling_rate=target_sr)

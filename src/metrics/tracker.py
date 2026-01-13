@@ -30,7 +30,8 @@ class MetricTracker:
         """
         if preserve_metrics:
             metrics_to_preserve = [
-                key for key in self._data.index if ("_4_8" in key or "_8_16" in key or "_4_16" in key) 
+                key for key in self._data.index 
+                if any(regime in key for regime in ["_4_8", "_8_16", "_8_24", "_4_16", "_4_24"])
                 and not any(loss_name in key for loss_name in ["loss", "grad_norm"])
             ]
  

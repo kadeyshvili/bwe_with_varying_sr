@@ -10,6 +10,7 @@ from src.metrics.tracker import MetricTracker
 from src.utils.io_utils import ROOT_PATH
 from src.model.melspec import  MelSpectrogram
 from src.metrics.calculate_metrics import calculate_all_metrics
+from src.utils.sr_utils import get_sr_ratio, get_regime_key
 from collections import defaultdict
 import numpy as np
 
@@ -78,9 +79,6 @@ class BaseTrainer:
         self.disc_optimizer = disc_optimizer
         self.gen_lr_scheduler = gen_lr_scheduler
         self.disc_lr_scheduler = disc_lr_scheduler
-        self.create_mel_spec_8_16 = MelSpectrogram(sr=16000).to(self.device)
-        self.create_mel_spec_4_8 = MelSpectrogram(sr=8000).to(self.device)
-        self.create_mel_spec = MelSpectrogram(sr=16000).to(self.device)
         # define dataloaders
         self.train_dataloader = dataloaders["train"]
         if epoch_len is None:
@@ -135,11 +133,7 @@ class BaseTrainer:
             writer=self.writer,
         )
         
-        self.samples_for_logging = {
-            "4_8": [],
-            "8_16": [],
-            "4_16": []
-        }
+        self.samples_for_logging = defaultdict(list)
 
         self.checkpoint_dir = (
             ROOT_PATH / config.trainer.save_dir / config.writer.run_name
@@ -209,11 +203,7 @@ class BaseTrainer:
         self.model.msd.train()
         self.model.mpd.train()
         self.train_metrics.reset()
-        self.samples_for_logging = {
-            "4_8": [],
-            "8_16": [],
-            "4_16": []
-        }
+        self.samples_for_logging = defaultdict(list)
         self.writer.set_step((epoch - 1) * self.epoch_len)
         self.writer.add_scalar("epoch", epoch)
         last_train_metrics = {}
@@ -239,13 +229,7 @@ class BaseTrainer:
 
             initial_sr = batch['initial_sr']
             target_sr = batch['target_sr']
-            regime_key = None
-            if initial_sr == 4000 and target_sr == 8000:
-                regime_key = "4_8"
-            elif initial_sr == 8000 and target_sr == 16000:
-                regime_key = "8_16"
-            elif initial_sr == 4000 and target_sr == 16000:
-                regime_key = "4_16"
+            regime_key = get_regime_key(initial_sr, target_sr)
             
             if regime_key and len(self.samples_for_logging[regime_key]) < 10:
                 
@@ -267,22 +251,14 @@ class BaseTrainer:
 
             if batch_idx % self.log_step == 0:
                 self.writer.set_step((epoch - 1) * self.epoch_len + batch_idx)
-                if batch['initial_sr'] == 4000 and batch['target_sr'] == 8000:
+                regime_key = get_regime_key(batch['initial_sr'], batch['target_sr'])
+                gen_loss_key = f"gen_loss_{regime_key}"
+                disc_loss_key = f"disc_loss_{regime_key}"
+                if gen_loss_key in batch and disc_loss_key in batch:
                     self.logger.debug(
-                        "Train Epoch: {} {} Generator Loss_4_8: {:.6f}, Discriminator Loss_4_8: {:.6f}".format(
-                            epoch, self._progress(batch_idx), batch["gen_loss_4_8"].item(), batch['disc_loss_4_8'].item()
-                        )
-                    )
-                elif batch['initial_sr'] == 8000 and batch['target_sr'] == 16000:
-                    self.logger.debug(
-                        "Train Epoch: {} {} Generator Loss_8_16: {:.6f}, Discriminator Loss_8_16: {:.6f}".format(
-                            epoch, self._progress(batch_idx), batch["gen_loss_8_16"].item(), batch['disc_loss_8_16'].item()
-                        )
-                    )
-                elif batch['initial_sr'] == 4000 and batch['target_sr'] == 16000:
-                    self.logger.debug(
-                        "Train Epoch: {} {} Generator Loss_4_16: {:.6f}, Discriminator Loss_4_16: {:.6f}".format(
-                            epoch, self._progress(batch_idx), batch["gen_loss"].item(), batch['disc_loss'].item()
+                        "Train Epoch: {} {} Generator Loss_{}: {:.6f}, Discriminator Loss_{}: {:.6f}".format(
+                            epoch, self._progress(batch_idx), regime_key, batch[gen_loss_key].item(), 
+                            regime_key, batch[disc_loss_key].item()
                         )
                     )
                 self.writer.add_scalar(
@@ -297,8 +273,8 @@ class BaseTrainer:
                 self.train_metrics.reset(preserve_metrics=True)
             if batch_idx + 1 >= self.epoch_len:
                 break
-        self.gen_lr_scheduler.step()
-        self.disc_lr_scheduler.step()
+            self.gen_lr_scheduler.step()
+            self.disc_lr_scheduler.step()
         
         if not last_train_metrics:
             last_train_metrics = self.train_metrics.result()
@@ -323,20 +299,19 @@ class BaseTrainer:
         self.writer.mode = part
         
         # Reset samples collection for validation
-        self.samples_for_logging = {
-            "4_8": [],
-            "8_16": [],
-            "4_16": []
-        }
+        self.samples_for_logging = defaultdict(list)
         
         # Reset metrics state before evaluation to avoid accumulation from previous epochs
+        all_regime_keys = set()
         for metric in self.metrics['inference']:
-            for mode in ["4_8", "8_16", "4_16", "default"]:
-                metric.results[mode] = defaultdict(list)
+            all_regime_keys.update(metric.results.keys())
         
-        metrics_4_8 = {}
-        metrics_8_16 = {}
-        metrics_4_16 = {}
+        for metric in self.metrics['inference']:
+            for mode in all_regime_keys:
+                if mode not in metric.results:
+                    metric.results[mode] = defaultdict(list)
+        
+        metrics_by_regime = {}
         
         with torch.no_grad():
             for batch_idx, batch in tqdm(
@@ -355,15 +330,12 @@ class BaseTrainer:
                 target_sr = batch['target_sr']
                 
                 # Collect samples from all regimes for logging
-                regime_key = None
-                if initial_sr == 4000 and target_sr == 8000:
-                    regime_key = "4_8"
-                elif initial_sr == 8000 and target_sr == 16000:
-                    regime_key = "8_16"
-                elif initial_sr == 4000 and target_sr == 16000:
-                    regime_key = "4_16"
+                regime_key = get_regime_key(initial_sr, target_sr)
                 
-                if regime_key and len(self.samples_for_logging[regime_key]) < 5:
+                if regime_key not in self.samples_for_logging:
+                    self.samples_for_logging[regime_key] = []
+                
+                if len(self.samples_for_logging[regime_key]) < 5:
                     initial_len_lr = batch['initial_len_lr']
                     initial_len_hr = batch['initial_len_hr']
                     initial_len_melspec_lr = batch['initial_len_melspec_lr']
@@ -386,82 +358,38 @@ class BaseTrainer:
                     }
                     self.samples_for_logging[regime_key].append(sample)
                 
-                # Calculate metrics for this batch
-                # Filter metrics by regime to avoid computing wrong metrics
-                if initial_sr == 4000 and target_sr == 8000:
-                    metrics_to_use = [m for m in self.metrics['inference'] if '_4_8' in m.name]
-                    batch_metrics = calculate_all_metrics(
-                        batch['generated_wav'], 
-                        batch['wav_hr'],
-                        metrics_to_use, 
-                        initial_sr, 
-                        target_sr
-                    )
-                    for k, (mean, std) in batch_metrics.items():
-                        if k in metrics_4_8:
-                            metrics_4_8[k].append(mean)
-                        else:
-                            metrics_4_8[k] = [mean]
-                    # Clear metrics results after processing batch to avoid accumulation
-                    mode_key = f"{initial_sr // 1000}_{target_sr // 1000}"
-                    for metric in metrics_to_use:
-                        metric.results[mode_key] = defaultdict(list)
-                    
-                elif initial_sr == 8000 and target_sr == 16000:
-                    # Only use metrics with _8_16 suffix
-                    metrics_to_use = [m for m in self.metrics['inference'] if '_8_16' in m.name]
-                    batch_metrics = calculate_all_metrics(
-                        batch['generated_wav'], 
-                        batch['wav_hr'],
-                        metrics_to_use, 
-                        initial_sr, 
-                        target_sr
-                    )
-                    for k, (mean, std) in batch_metrics.items():
-                        if k in metrics_8_16:
-                            metrics_8_16[k].append(mean)
-                        else:
-                            metrics_8_16[k] = [mean]
-                    # Clear metrics results after processing batch to avoid accumulation
-                    mode_key = f"{initial_sr // 1000}_{target_sr // 1000}"
-                    for metric in metrics_to_use:
-                        metric.results[mode_key] = defaultdict(list)
-
-                elif initial_sr == 4000 and target_sr == 16000:
-                    # Only use metrics without suffix (for 4_16 regime)
-                    metrics_to_use = [m for m in self.metrics['inference'] if '_4_8' not in m.name and '_8_16' not in m.name]
-                    batch_metrics = calculate_all_metrics(
-                        batch['generated_wav'], 
-                        batch['wav_hr'],
-                        metrics_to_use, 
-                        initial_sr, 
-                        target_sr
-                    )
-                    for k, (mean, std) in batch_metrics.items():
-                        if k in metrics_4_16:
-                            metrics_4_16[k].append(mean)
-                        else:
-                            metrics_4_16[k] = [mean]
-                    # Clear metrics results after processing batch to avoid accumulation
-                    mode_key = f"{initial_sr // 1000}_{target_sr // 1000}"
-                    for metric in metrics_to_use:
+                metrics_to_use = self.metrics['inference']
+                batch_metrics = calculate_all_metrics(
+                    batch['generated_wav'], 
+                    batch['wav_hr'],
+                    metrics_to_use, 
+                    initial_sr, 
+                    target_sr
+                )
+                
+                if regime_key not in metrics_by_regime:
+                    metrics_by_regime[regime_key] = {}
+                
+                for k, (mean, std) in batch_metrics.items():
+                    if k in metrics_by_regime[regime_key]:
+                        metrics_by_regime[regime_key][k].append(mean)
+                    else:
+                        metrics_by_regime[regime_key][k] = [mean]
+                
+                mode_key = regime_key
+                for metric in metrics_to_use:
+                    if mode_key in metric.results:
                         metric.results[mode_key] = defaultdict(list)
                     
             self.writer.set_step(epoch * self.epoch_len, part)
             # Log all collected samples from all regimes
             self._log_batch(batch_idx, batch, part)
         
-        for k, values in metrics_4_8.items():
-            mean_val = np.mean(values)
-            self.evaluation_metrics.update(k, mean_val)
-
-        for k, values in metrics_8_16.items():
-            mean_val = np.mean(values)
-            self.evaluation_metrics.update(k, mean_val)
-
-        for k, values in metrics_4_16.items():
-            mean_val = np.mean(values)
-            self.evaluation_metrics.update(k, mean_val)
+        # Aggregate metrics by regime
+        for regime_key, metrics_dict in metrics_by_regime.items():
+            for metric_name, values in metrics_dict.items():
+                mean_val = np.mean(values)
+                self.evaluation_metrics.update(metric_name, mean_val)
         
         self._log_scalars(self.evaluation_metrics)
         return self.evaluation_metrics.result()

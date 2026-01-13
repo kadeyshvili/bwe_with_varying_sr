@@ -14,6 +14,7 @@ import itertools
 
 from src.metrics.metric_denoising import composite_eval
 from src.metrics.metric_nets import Wav2Vec2MOS
+from src.utils.sr_utils import get_regime_key
 
 
 class Metric(ABC):
@@ -30,7 +31,9 @@ class Metric(ABC):
         self.results = {
             "4_8": defaultdict(list),
             "8_16": defaultdict(list),
+            "8_24": defaultdict(list),
             "4_16": defaultdict(list),
+            "4_24": defaultdict(list),
             "default": defaultdict(list)
         }
         self.current_mode = "default"
@@ -42,12 +45,9 @@ class Metric(ABC):
     @abstractmethod
     def __call__(self, samples, real_samples, target_sr, initial_sr=None):
         if initial_sr is not None and target_sr is not None:
-            if initial_sr == 4000 and target_sr == 8000:
-                self.current_mode = "4_8"
-            elif initial_sr == 8000 and target_sr == 16000:
-                self.current_mode = "8_16"
-            elif initial_sr == 4000 and target_sr == 16000:
-                self.current_mode = "4_16"
+            regime_key = get_regime_key(initial_sr, target_sr)
+            if regime_key in self.results:
+                self.current_mode = regime_key
             else:
                 self.current_mode = "default"
         else:
@@ -294,12 +294,9 @@ class LSD_LF(Metric):
             initial_sr: initial sample rate
             target_sr: target sample rate
         """
-        if initial_sr == 4000 and target_sr == 8000:
-            self.current_mode = "4_8"
-        elif initial_sr == 8000 and target_sr == 16000:
-            self.current_mode = "8_16"
-        elif initial_sr == 4000 and target_sr == 16000:
-            self.current_mode = "4_16"
+        regime_key = get_regime_key(initial_sr, target_sr)
+        if regime_key in self.results:
+            self.current_mode = regime_key
         else:
             self.current_mode = "default"
  
@@ -341,12 +338,9 @@ class LSD_HF(Metric):
             initial_sr: initial sample rate
             target_sr: target sample rate
         """
-        if initial_sr == 4000 and target_sr == 8000:
-            self.current_mode = "4_8"
-        elif initial_sr == 8000 and target_sr == 16000:
-            self.current_mode = "8_16"
-        elif initial_sr == 4000 and target_sr == 16000:
-            self.current_mode = "4_16"
+        regime_key = get_regime_key(initial_sr, target_sr)
+        if regime_key in self.results:
+            self.current_mode = regime_key
         else:
             self.current_mode = "default"
  

@@ -116,13 +116,7 @@ class HiFiPlusGenerator(torch.nn.Module):
         self.use_skip_connect = use_skip_connect
         self.upsampling_block1 = upsampling_utils.UpsampleTwice(upsample_init_channels, upsample_block_rates, upsample_block_kernel_sizes)
         self.upsampling_block2 = upsampling_utils.UpsampleTwice(upsample_init_channels, upsample_block_rates, upsample_block_kernel_sizes)
-        self.upsampling_block_x3 = nn.ConvTranspose1d(in_channels=upsample_init_channels,
-            out_channels=upsample_init_channels,
-            kernel_size=9,
-            stride=3,
-            padding=3,
-            output_padding=0
-        )
+        self.upsampling_block_x3 = upsampling_utils.UpsampleThreeTimes(upsample_init_channels)
         self.nw_stack1 = upsampling_utils.NUWaveStack(residual_channels, bsft_channels, n_blocks=nwstack1_blocks)
         self.nw_stack2 = upsampling_utils.NUWaveStack(residual_channels, bsft_channels, n_blocks=nwstack2_blocks)
         if kernel_sizes_mrf is not None:
@@ -370,12 +364,12 @@ class A2AHiFiPlusGenerator(HiFiPlusGenerator):
 
         padded_reference = torch.nn.functional.pad(x_reference, (0, pad_reference_len)).to(x.device)
 
-        upsampled_x = self.upsampling_block1(padded_x)
-
         ratio = get_sr_ratio(initial_sr, target_sr)
         num_blocks = get_num_blocks(initial_sr, target_sr)
-        
-        if ratio == 3:
+
+        if ratio % 3 != 0:
+            upsampled_x = self.upsampling_block1(padded_x)
+        else:
             upsampled_x=self.upsampling_block_x3(padded_x)
         
         if num_blocks == 1:
@@ -384,7 +378,10 @@ class A2AHiFiPlusGenerator(HiFiPlusGenerator):
             x_res = self.nw_stack1(upsampled_x, padded_reference, band_mask)
             
         elif num_blocks == 2:
-            intermediate_sr = get_intermediate_sr(initial_sr, target_sr)
+            if ratio % 3 != 0:
+                intermediate_sr = get_intermediate_sr(initial_sr, target_sr)
+            else:
+                intermediate_sr = initial_sr * 3
             resampled_intermediate = []
             for i in range(batch_size):
                 x_single = padded_x[i].cpu().numpy()

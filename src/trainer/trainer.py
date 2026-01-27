@@ -64,11 +64,13 @@ class Trainer(BaseTrainer):
         batch['msd_gt_out'] = msd_gt_out
         batch['msd_fake_out'] = msd_fake_out
         
-        ratio = get_sr_ratio(initial_sr, target_sr)
-        if ratio < 4:
-            mpd_disc_loss, msd_disc_loss, disc_loss = self.criterion.discriminator_loss_ratio_2(batch)
-        else:
+        #4-8-16, 8-24-48, 4-8, 8-16, 8-16-48,
+        if (initial_sr==4000 and target_sr==8000) or (initial_sr==8000 and target_sr==24000):
+            mpd_disc_loss, msd_disc_loss, disc_loss = self.criterion.discriminator_loss_2(batch)
+        elif (initial_sr==4000 and target_sr==16000) or (initial_sr==8000 and target_sr==48000):
             mpd_disc_loss, msd_disc_loss, disc_loss = self.criterion.discriminator_loss(batch)
+        else:
+            mpd_disc_loss, msd_disc_loss, disc_loss = self.criterion.discriminator_loss_3(batch)
         
 
 
@@ -97,19 +99,21 @@ class Trainer(BaseTrainer):
         target_melspec = target_mel_spec_creator(target_wav.squeeze(1))
         batch['mel_spec_hr'] = target_melspec
         
-        ratio = get_sr_ratio(initial_sr, target_sr)
-        if ratio < 4:
+        if (initial_sr==4000 and target_sr==8000) or (initial_sr==8000 and target_sr==24000):
             mpd_gen_loss, msd_gen_loss,\
                 mpd_feats_gen_loss, msd_feats_gen_loss,\
                 mel_spec_loss, gen_loss =\
-                    self.criterion.generator_loss_ratio_2(batch)
-        elif ratio == 4:
+                    self.criterion.generator_loss_2(batch)
+        elif (initial_sr==4000 and target_sr==16000) or (initial_sr==8000 and target_sr==48000):
             mpd_gen_loss, msd_gen_loss,\
                 mpd_feats_gen_loss, msd_feats_gen_loss,\
                 mel_spec_loss, gen_loss =\
                     self.criterion.generator_loss(batch)
         else:
-            raise ValueError(f"Unsupported ratio: {ratio}")
+            mpd_gen_loss, msd_gen_loss,\
+                mpd_feats_gen_loss, msd_feats_gen_loss,\
+                mel_spec_loss, gen_loss =\
+                    self.criterion.generator_loss_3(batch)
 
         if self.is_train:
             self._clip_grad_norm(self.model.generator)

@@ -34,6 +34,8 @@ class Metric(ABC):
             "8_24": defaultdict(list),
             "4_16": defaultdict(list),
             "4_24": defaultdict(list),
+            "8_48": defaultdict(list),
+            "24_48": defaultdict(list),
             "default": defaultdict(list)
         }
         self.current_mode = "default"
@@ -268,7 +270,7 @@ class LSD(Metric):
         for i in range(batch_size):
             sp = torch.log10(stft(ref_sig[i]).square().clamp(1e-8))
             st = torch.log10(stft(out_sig[i]).square().clamp(1e-8))
-            lsd_sample = (sp - st).square().mean(dim=1).sqrt().mean()
+            lsd_sample = (sp - st).square().mean(dim=0).sqrt().mean()
             lsd_list.append(lsd_sample.item())
         
         
@@ -313,8 +315,7 @@ class LSD_LF(Metric):
         for i in range(batch_size):
             sp = torch.log10(stft(ref_sig[i]).square().clamp(1e-8))
             st = torch.log10(stft(out_sig[i]).square().clamp(1e-8))
-            
-            lsd_lf_sample = (sp[:hf, :] - st[:hf, :]).square().mean(dim=1).sqrt().mean()
+            lsd_lf_sample = (sp[:hf, :] - st[:hf, :]).square().mean(dim=0).sqrt().mean()
             lsd_lf_list.append(lsd_lf_sample.item())
  
         self.results[self.current_mode]["mean"].append(np.mean(lsd_lf_list))
@@ -357,7 +358,7 @@ class LSD_HF(Metric):
             sp = torch.log10(stft(ref_sig[i]).square().clamp(1e-8))
             st = torch.log10(stft(out_sig[i]).square().clamp(1e-8))
             
-            lsd_hf_sample = (sp[hf:, :] - st[hf:, :]).square().mean(dim=1).sqrt().mean()
+            lsd_hf_sample = (sp[hf:, :] - st[hf:, :]).square().mean(dim=0).sqrt().mean()
             lsd_hf_list.append(lsd_hf_sample.item())
         
         

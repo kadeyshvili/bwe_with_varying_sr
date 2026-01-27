@@ -230,6 +230,8 @@ class BaseTrainer:
             initial_sr = batch['initial_sr']
             target_sr = batch['target_sr']
             regime_key = get_regime_key(initial_sr, target_sr)
+            if regime_key not in self.samples_for_logging:
+                self.samples_for_logging[regime_key] = []
             
             if regime_key and len(self.samples_for_logging[regime_key]) < 10:
                 

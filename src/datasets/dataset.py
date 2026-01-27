@@ -36,6 +36,7 @@ class VCTKDataset(Dataset):
         wavs_dir_8khz=None,
         wavs_dir_16khz=None,
         wavs_dir_24khz=None,
+        wavs_dir_48khz=None,
         segment_size=8192,
         split=True,
         mode='train',
@@ -60,42 +61,56 @@ class VCTKDataset(Dataset):
             self.audio_files_24k = get_dataset_filelist(dataset_split_file, wavs_dir_24khz)
         else:
             self.audio_files_24k  = None
+
+        if wavs_dir_48khz is not None:
+            self.audio_files_48k = get_dataset_filelist(dataset_split_file, wavs_dir_48khz)
+        else:
+            self.audio_files_48k  = None
+        
         
         random.seed(1234)
         self.mode = mode
         self.segment_size = segment_size
         self.split = split
         self.device = device
-        
         if self.audio_files_8k is not None and self.audio_files_16k is not None:
-            self.current_mode = "8_16"
             self.audio_files_lr = self.audio_files_8k
             self.audio_files_hr = self.audio_files_16k
+            self.current_mode = '8_16'
 
         elif self.audio_files_8k is not None and self.audio_files_24k is not None:
-            self.current_mode = "8_24"
             self.audio_files_lr = self.audio_files_8k
             self.audio_files_hr = self.audio_files_24k
+            self.current_mode = '8_24'
+
 
         elif self.audio_files_4k is not None and self.audio_files_8k is not None:
-            self.current_mode = "4_8"
             self.audio_files_lr = self.audio_files_4k
             self.audio_files_hr = self.audio_files_8k
+            self.current_mode = '4_8'
+
 
         elif self.audio_files_4k is not None and self.audio_files_16k is not None:
-            self.current_mode = "4_16"
             self.audio_files_lr = self.audio_files_4k
             self.audio_files_hr = self.audio_files_16k
+            self.current_mode = '4_16'
             
         elif self.audio_files_4k is not None and self.audio_files_24k is not None:
-            self.current_mode = "4_24"
             self.audio_files_lr = self.audio_files_4k
             self.audio_files_hr = self.audio_files_24k
+            self.current_mode = '8_24'
+
+        elif self.audio_files_8k is not None and self.audio_files_48k is not None:
+            self.audio_files_lr = self.audio_files_8k
+            self.audio_files_hr = self.audio_files_48k
+            self.current_mode = '8_48'
+
         
         self.mel_creator_4k = MelSpectrogram(sr=4000) if wavs_dir_4khz is not None else None
         self.mel_creator_8k = MelSpectrogram(sr=8000) if wavs_dir_8khz is not None else None
         self.mel_creator_16k = MelSpectrogram(sr=16000) if wavs_dir_16khz is not None else None
         self.mel_creator_24k = MelSpectrogram(sr=24000) if wavs_dir_24khz is not None else None
+        self.mel_creator_48k = MelSpectrogram(sr=48000) if wavs_dir_48khz is not None else None
 
 
         if self.current_mode is not None:
@@ -136,6 +151,8 @@ class VCTKDataset(Dataset):
             sr_to_files[16000] = (self.audio_files_16k, self.mel_creator_16k)
         if self.audio_files_24k is not None and self.mel_creator_24k is not None:
             sr_to_files[24000] = (self.audio_files_24k, self.mel_creator_24k)
+        if self.audio_files_48k is not None and self.mel_creator_48k is not None:
+            sr_to_files[48000] = (self.audio_files_48k, self.mel_creator_48k)
         
         if initial_sr not in sr_to_files:
             available_srs = list(sr_to_files.keys())
@@ -169,6 +186,10 @@ class VCTKDataset(Dataset):
             available_modes.append("8_24")
         if self.audio_files_4k is not None and self.audio_files_24k is not None:
             available_modes.append("4_24")
+        if self.audio_files_8k is not None and self.audio_files_48k is not None:
+            available_modes.append("8_48")
+        if self.audio_files_24k is not None and self.audio_files_48k is not None:
+            available_modes.append("24_48")
         return available_modes
         
     def __getitem__(self, index_and_mode):
@@ -219,6 +240,8 @@ class VCTKDataset(Dataset):
             return len(self.audio_files_16k)
         elif self.audio_files_24k is not None:
             return len(self.audio_files_24k)
+        elif self.audio_files_48k is not None:
+            return len(self.audio_files_48k)
         else:
             raise ValueError("No audio files directories provided.")
 
@@ -255,6 +278,10 @@ class SRConsistentBatchSampler(torch.utils.data.Sampler):
             available_regimes.append("8_24")
         if self.dataset.audio_files_4k is not None and self.dataset.audio_files_24k is not None:
             available_regimes.append("4_24")
+        if self.dataset.audio_files_8k is not None and self.dataset.audio_files_48k is not None:
+            available_regimes.append("8_48")
+        if self.dataset.audio_files_24k is not None and self.dataset.audio_files_48k is not None:
+            available_regimes.append("24_48")
         
         return available_regimes
         

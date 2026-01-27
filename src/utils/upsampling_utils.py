@@ -407,6 +407,17 @@ class MRF(nn.Module):
             result += block(x)
         return result
     
+class UpsampleThreeTimes(torch.nn.Module):
+    def __init__(self, initial_channels, norm_type: Literal["weight", "spectral", "id"] = "id"):
+        super().__init__()
+        self.norm = dict(weight=weight_norm, spectral=spectral_norm, id=lambda x: x)[norm_type]
+        self.upsample_block = self.norm(nn.ConvTranspose1d(initial_channels, initial_channels,kernel_size=9, stride=3, padding=3, output_padding=0))
+
+        
+    def forward(self, x):
+        out = self.upsample_block(x)
+        return out
+
 
 class UpsampleTwice(torch.nn.Module):
     def __init__(

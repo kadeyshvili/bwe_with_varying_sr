@@ -1,0 +1,85 @@
+train: []
+inference:
+    #8-24
+  - _target_: src.metrics.MOSNet
+    name: "MOS_8_24"
+    sr: 24000
+  - _target_: src.metrics.ScaleInvariantSignalToDistortionRatio
+    name: "SISDR_8_24"
+  - _target_: src.metrics.SignalToNoiseRatio
+    name: "SNR_8_24"
+  - _target_: src.metrics.LSD
+    name: "LSD_8_24"
+  - _target_: src.metrics.LSD_LF
+    name: "LSD_LF_8_24"
+  - _target_: src.metrics.LSD_HF
+    name: "LSD_HF_8_24"
+  - _target_: src.metrics.STOI
+    name: "STOI_8_24"
+    sr: 24000
+  - _target_: src.metrics.PESQ
+    name: "PESQ_8_24"
+    sr: 24000
+  - _target_: src.metrics.CSIG
+    name: "CSIG_8_24"
+  - _target_: src.metrics.CBAK
+    name: "CBAK_8_24"
+  - _target_: src.metrics.COVL
+    name: "COVL_8_24"
+
+
+    #24-48
+  - _target_: src.metrics.MOSNet
+    name: "MOS_24_48"
+    sr: 48000
+  - _target_: src.metrics.ScaleInvariantSignalToDistortionRatio
+    name: "SISDR_24_48"
+  - _target_: src.metrics.SignalToNoiseRatio
+    name: "SNR_24_48"
+  - _target_: src.metrics.LSD
+    name: "LSD_24_48"
+  - _target_: src.metrics.LSD_LF
+    name: "LSD_LF_24_48"
+  - _target_: src.metrics.LSD_HF
+    name: "LSD_HF_24_48"
+  - _target_: src.metrics.STOI
+    name: "STOI_24_48"
+    sr: 48000
+  - _target_: src.metrics.PESQ
+    name: "PESQ_24_48"
+    sr: 48000
+  - _target_: src.metrics.CSIG
+    name: "CSIG_24_48"
+  - _target_: src.metrics.CBAK
+    name: "CBAK_24_48"
+  - _target_: src.metrics.COVL
+    name: "COVL_24_48"
+
+
+
+    #8-48
+  - _target_: src.metrics.MOSNet
+    name: "MOS_8_48"
+    sr: 48000
+  - _target_: src.metrics.ScaleInvariantSignalToDistortionRatio
+    name: "SISDR_8_48"
+  - _target_: src.metrics.SignalToNoiseRatio
+    name: "SNR_8_48"
+  - _target_: src.metrics.LSD
+    name: "LSD_8_48"
+  - _target_: src.metrics.LSD_LF
+    name: "LSD_LF_8_48"
+  - _target_: src.metrics.LSD_HF
+    name: "LSD_HF_8_48"
+  - _target_: src.metrics.STOI
+    name: "STOI_8_48"
+    sr: 48000
+  - _target_: src.metrics.PESQ
+    name: "PESQ_8_48"
+    sr: 48000
+  - _target_: src.metrics.CSIG
+    name: "CSIG_8_48"
+  - _target_: src.metrics.CBAK
+    name: "CBAK_8_48"
+  - _target_: src.metrics.COVL
+    name: "COVL_8_48"

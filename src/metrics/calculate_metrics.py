@@ -39,13 +39,54 @@ class Metric(ABC):
             "default": defaultdict(list)
         }
         self.current_mode = "default"
+
+    def _trim_to_length(self, audio, length):
+        if length is not None and length > 0:
+            if torch.is_tensor(audio):
+                if audio.dim() > 0 and len(audio) > length:
+                    return audio[:length]
+            elif isinstance(audio, np.ndarray):
+                if len(audio) > length:
+                    return audio[:length]
+            return audio
+        return audio
+    
+    def _process_individual_audios(self, samples, real_samples, initial_lens):
+        if samples.dim() == 3:
+            samples = samples.squeeze(1)
+        if real_samples.dim() == 3:
+            real_samples = real_samples.squeeze(1)
+        
+        if samples.dim() == 1:
+            samples = samples.unsqueeze(0)
+        if real_samples.dim() == 1:
+            real_samples = real_samples.unsqueeze(0)
+        
+        batch_size = samples.shape[0]
+        individual_samples = []
+        individual_real_samples = []
+
+        for i in range(batch_size):
+            if initial_lens is not None and i < len(initial_lens):
+                length = initial_lens[i]        
+                sample = self._trim_to_length(samples[i], length)
+                real_sample = self._trim_to_length(real_samples[i], length)
+            else:
+                sample = samples[i]
+                real_sample = real_samples[i]
+            
+            individual_samples.append(sample.detach().cpu())
+            individual_real_samples.append(real_sample.detach().cpu())
+        
+        return individual_samples, individual_real_samples
+
  
     @abstractmethod
     def better(self, first, second):
         pass
  
     @abstractmethod
-    def __call__(self, samples, real_samples, target_sr, initial_sr=None):
+    def __call__(self, samples, real_samples, target_sr, initial_sr=None, initial_lens=None):
         if initial_sr is not None and target_sr is not None:
             regime_key = get_regime_key(initial_sr, target_sr)
             if regime_key in self.results:
@@ -57,7 +98,6 @@ class Metric(ABC):
         pass
  
     def get_result(self, mode=None):
-        """Получение результатов для указанного режима"""
         if mode is None:
             mode = self.current_mode
         return self.results[mode]
@@ -88,65 +128,61 @@ class MOSNet(Metric):
     def _compute_per_split(self, split):
         return self.mos_net.calculate(split)
  
-    def __call__(self, samples, real_samples, target_sr, initial_sr=None):
-        super().__call__(samples, real_samples, target_sr, initial_sr)
+    def __call__(self, samples, real_samples, target_sr, initial_sr=None, initial_lens=None):
+        super().__call__(samples, real_samples, target_sr, initial_sr, initial_lens)
 
         required_sr = self.mos_net.sample_rate
         resample = torchaudio.transforms.Resample(
             orig_freq=target_sr, new_freq=required_sr
         ).to(self.device)
-        samples = samples.to(self.device)
+
+        individual_samples, _ = self._process_individual_audios(samples, real_samples, initial_lens)
         
-        if samples.dim() == 3:
-            samples = samples.squeeze(1)
+        processed_samples = []
+        for s in individual_samples:
+            s = s.to(self.device)
+            s = s / s.abs().max() if s.abs().max() > 0 else s
+            s_resampled = resample(s.unsqueeze(0)).squeeze()
+            processed_samples.append(s_resampled)
         
-        samples /= samples.abs().max(-1, keepdim=True)[0]
-        samples = [resample(s).squeeze() for s in samples]
+        actual_count = len(processed_samples)
 
         splits = [
-            samples[i : i + self.num_splits]
-            for i in range(0, len(samples), self.num_splits)
+            processed_samples[i : i + self.num_splits]
+            for i in range(0, len(processed_samples), self.num_splits)
         ]
         fid_per_splits = [self._compute_per_split(split) for split in splits]
+        self.results[self.current_mode]["val"].append(fid_per_splits)
+        self.results[self.current_mode]["count"].append(actual_count)
 
-        self.results[self.current_mode]["mean"].append(np.mean(fid_per_splits))
-        self.results[self.current_mode]["std"].append(np.std(fid_per_splits))
 
-        return np.mean(fid_per_splits) 
  
 
 class ScaleInvariantSignalToDistortionRatio(Metric):
-    """
-    See https://arxiv.org/pdf/1811.02508.pdf
-    """
     name = "SISDR"
  
     def better(self, first, second):
         return first > second
  
-    def __call__(self, samples, real_samples, target_sr, initial_sr=None):
-        super().__call__(samples, real_samples, target_sr, initial_sr)
- 
-        real_samples = real_samples.squeeze()
-        samples = samples.squeeze()
+    def __call__(self, samples, real_samples, target_sr, initial_sr=None, initial_lens=None):
+        super().__call__(samples, real_samples, target_sr, initial_sr, initial_lens)
+
+        individual_samples, individual_real_samples = self._process_individual_audios(samples, real_samples, initial_lens)
         
-        if real_samples.dim() == 1:
-            real_samples = real_samples[None]
-            samples = samples[None]
+        si_sdr_list = []
+        for sample, real_sample in zip(individual_samples, individual_real_samples):
+            sample = sample.unsqueeze(0) if sample.dim() == 1 else sample
+            real_sample = real_sample.unsqueeze(0) if real_sample.dim() == 1 else real_sample
+            
+            alpha = (sample * real_sample).sum() / real_sample.square().sum()
+            real_sample_scaled = alpha * real_sample
+            e_target = real_sample_scaled.square().sum()
+            e_res = (sample - real_sample_scaled).square().sum()
+            si_sdr = 10 * torch.log10(e_target / e_res).item()
+            si_sdr_list.append(si_sdr)
+        self.results[self.current_mode]["val"].append(si_sdr_list)
+        self.results[self.current_mode]["count"].append(len(si_sdr_list))
         
-        alpha = (samples * real_samples).sum(
-            dim=1, keepdim=True
-        ) / real_samples.square().sum(dim=1, keepdim=True)
-        real_samples_scaled = alpha * real_samples
-        e_target = real_samples_scaled.square().sum(dim=1)
-        e_res = (samples - real_samples_scaled).square().sum(dim=1)
-        si_sdr = 10 * torch.log10(e_target / e_res).cpu().numpy()
- 
-        self.results[self.current_mode]["mean"].append(np.mean(si_sdr))
-        self.results[self.current_mode]["std"].append(np.std(si_sdr))
- 
-        return np.mean(si_sdr)
- 
  
 class SignalToNoiseRatio(Metric):
     name = "SNR"
@@ -154,27 +190,21 @@ class SignalToNoiseRatio(Metric):
     def better(self, first, second):
         return first > second
  
-    def __call__(self, samples, real_samples, target_sr, initial_sr=None):
-        super().__call__(samples, real_samples, target_sr, initial_sr)
- 
-        if real_samples.dim() == 3:
-            real_samples = real_samples.squeeze(1)
-        if samples.dim() == 3:
-            samples = samples.squeeze(1)
+    def __call__(self, samples, real_samples, target_sr, initial_sr=None, initial_lens=None):
+        super().__call__(samples, real_samples, target_sr, initial_sr, initial_lens)
+
+        individual_samples, individual_real_samples = self._process_individual_audios(samples, real_samples, initial_lens)
         
-        if real_samples.dim() == 1:
-            real_samples = real_samples.unsqueeze(0)
-        if samples.dim() == 1:
-            samples = samples.unsqueeze(0)
+        snr_list = []
+        for sample, real_sample in zip(individual_samples, individual_real_samples):
+            e_target = real_sample.square().sum()
+            e_res = (sample - real_sample).square().sum()
+            snr = 10 * torch.log10(e_target / e_res).item()
+            snr_list.append(snr)
+    
+        self.results[self.current_mode]["val"].append(snr_list)
+        self.results[self.current_mode]["count"].append(len(snr_list))
  
-        e_target = real_samples.square().sum(dim=1)
-        e_res = (samples - real_samples).square().sum(dim=1)
-        snr = 10 * torch.log10(e_target / e_res).cpu().numpy()
- 
-        self.results[self.current_mode]["mean"].append(np.mean(snr))
-        self.results[self.current_mode]["std"].append(np.std(snr))
- 
-        return np.mean(snr)
  
  
 class VGGDistance(Metric):
@@ -188,42 +218,30 @@ class VGGDistance(Metric):
  
     def better(self, first, second):
         return first < second
+    
+
+    def __call__(self, samples, real_samples, target_sr, initial_sr=None, initial_lens=None):
+        super().__call__(samples, real_samples, target_sr, initial_sr, initial_lens)
+
+        individual_samples, individual_real_samples = self._process_individual_audios(samples, real_samples, initial_lens)
+        
+        dist_list = []
+        for sample, real_sample in zip(individual_samples, individual_real_samples):
+            sample_np = sample.cpu().numpy()
+            real_sample_np = real_sample.cpu().numpy()
+            
+            assert (
+                len(sample_np) >= 16384
+            ), f"too small segment size {len(sample_np)}, need at least 16384 samples"
+            
+            real_emb = self.model(real_sample_np, self.sr)
+            fake_emb = self.model(sample_np, self.sr)
+            dist = (real_emb - fake_emb).square().mean().item()
+            dist_list.append(dist)
  
-    def __call__(self, samples, real_samples, target_sr, initial_sr=None):
-        # Определяем режим апсемплинга
-        super().__call__(samples, real_samples, target_sr, initial_sr)
+        self.results[self.current_mode]["val"].append(dist)
+        self.results[self.current_mode]["count"].append(len(dist))
  
-        if real_samples.dim() == 3:
-            real_samples = real_samples.squeeze(1)
-        if samples.dim() == 3:
-            samples = samples.squeeze(1)
-        
-        real_samples = real_samples.cpu().numpy()
-        samples = samples.cpu().numpy()
-        
-        if real_samples.ndim == 1:
-            real_samples = real_samples[None]
-        if samples.ndim == 1:
-            samples = samples[None]
-        
-        assert (
-            samples.shape[1] >= 16384
-        ), f"too small segment size {samples.shape[1]}, need at least 16384 samples"
-        
-        real_embs, fake_embs = [], []
-        for real_s, fake_s in zip(real_samples, samples):
-            real_embs.append(self.model(real_s, self.sr))
-            fake_embs.append(self.model(fake_s, self.sr))
-        
-        real_embs = torch.stack(real_embs, dim=0)
-        fake_embs = torch.stack(fake_embs, dim=0)
-        dist = (real_embs - fake_embs).square().mean(dim=1)
-        dist = dist.cpu().detach().numpy()
- 
-        self.results[self.current_mode]["mean"].append(np.mean(dist))
-        self.results[self.current_mode]["std"].append(np.std(dist))
- 
-        return np.mean(dist) 
  
 
 class STFTMag(nn.Module):
@@ -247,7 +265,7 @@ class LSD(Metric):
     def better(self, first, second):
         return first < second
  
-    def __call__(self, out_sig, ref_sig, target_sr, initial_sr):
+    def __call__(self, out_sig, ref_sig, target_sr, initial_sr=None, initial_lens=None):
         """
         Compute LSD (log spectral distance)
         Arguments:
@@ -255,39 +273,31 @@ class LSD(Metric):
             ref_sig: vector (torch.Tensor), reference signal(ground truth) [B,T]
             initial_sr: initial sample rate
             target_sr: target sample rate
+            initial_lens: actual lengths of audio samples
         """
-        super().__call__(out_sig, ref_sig, target_sr, initial_sr)
- 
-        out_sig = out_sig.cpu().squeeze(1)
-        ref_sig = ref_sig.cpu().squeeze(1)
+        super().__call__(out_sig, ref_sig, target_sr, initial_sr, initial_lens)
+
+        individual_samples, individual_real_samples = self._process_individual_audios(out_sig, ref_sig, initial_lens)
         
- 
         stft = STFTMag(2048, 512)
-        
-        batch_size = out_sig.shape[0]
         lsd_list = []
         
-        for i in range(batch_size):
-            sp = torch.log10(stft(ref_sig[i]).square().clamp(1e-8))
-            st = torch.log10(stft(out_sig[i]).square().clamp(1e-8))
+        for sample, real_sample in zip(individual_samples, individual_real_samples):
+            sp = torch.log10(stft(real_sample).square().clamp(1e-8))
+            st = torch.log10(stft(sample).square().clamp(1e-8))
             lsd_sample = (sp - st).square().mean(dim=0).sqrt().mean()
             lsd_list.append(lsd_sample.item())
-        
-        
  
-        self.results[self.current_mode]["mean"].append(np.mean(lsd_list))
-        self.results[self.current_mode]["std"].append(np.std(lsd_list))
+        self.results[self.current_mode]["val"].append(lsd_list)
+        self.results[self.current_mode]["count"].append(len(lsd_list))
  
-        return np.mean(lsd_list) 
-    
-
 class LSD_LF(Metric):
     name = "LSD_LF"
  
     def better(self, first, second):
         return first < second
  
-    def __call__(self, out_sig, ref_sig, target_sr, initial_sr):
+    def __call__(self, out_sig, ref_sig, target_sr, initial_sr=None, initial_lens=None):
         """
         Compute LSD (log spectral distance) for low frequencies
         Arguments:
@@ -295,33 +305,26 @@ class LSD_LF(Metric):
             ref_sig: vector (torch.Tensor), reference signal(ground truth) [B,T]
             initial_sr: initial sample rate
             target_sr: target sample rate
+            initial_lens: actual lengths of audio samples
         """
-        regime_key = get_regime_key(initial_sr, target_sr)
-        if regime_key in self.results:
-            self.current_mode = regime_key
-        else:
-            self.current_mode = "default"
- 
-        out_sig = out_sig.cpu().squeeze(1)
-        ref_sig = ref_sig.cpu().squeeze(1)
+        super().__call__(out_sig, ref_sig, target_sr, initial_sr, initial_lens)
+
+        individual_samples, individual_real_samples = self._process_individual_audios(out_sig, ref_sig, initial_lens)
     
- 
         stft = STFTMag(2048, 512)
         hf = int(1025 * (initial_sr / target_sr))
         
-        batch_size = out_sig.shape[0]
         lsd_lf_list = []
         
-        for i in range(batch_size):
-            sp = torch.log10(stft(ref_sig[i]).square().clamp(1e-8))
-            st = torch.log10(stft(out_sig[i]).square().clamp(1e-8))
+        for sample, real_sample in zip(individual_samples, individual_real_samples):
+            sp = torch.log10(stft(real_sample).square().clamp(1e-8))
+            st = torch.log10(stft(sample).square().clamp(1e-8))
             lsd_lf_sample = (sp[:hf, :] - st[:hf, :]).square().mean(dim=0).sqrt().mean()
             lsd_lf_list.append(lsd_lf_sample.item())
+
+        self.results[self.current_mode]["val"].append(lsd_lf_list)
+        self.results[self.current_mode]["count"].append(len(lsd_lf_list))
  
-        self.results[self.current_mode]["mean"].append(np.mean(lsd_lf_list))
-        self.results[self.current_mode]["std"].append(np.std(lsd_lf_list))
- 
-        return np.mean(lsd_lf_list)
     
 
 class LSD_HF(Metric):
@@ -330,7 +333,7 @@ class LSD_HF(Metric):
     def better(self, first, second):
         return first < second
  
-    def __call__(self, out_sig, ref_sig, target_sr, initial_sr):
+    def __call__(self, out_sig, ref_sig, target_sr, initial_sr=None, initial_lens=None):
         """
         Compute LSD (log spectral distance) for high frequencies
         Arguments:
@@ -338,34 +341,27 @@ class LSD_HF(Metric):
             ref_sig: vector (torch.Tensor), reference signal(ground truth) [B,T]
             initial_sr: initial sample rate
             target_sr: target sample rate
+            initial_lens: actual lengths of audio samples
         """
-        regime_key = get_regime_key(initial_sr, target_sr)
-        if regime_key in self.results:
-            self.current_mode = regime_key
-        else:
-            self.current_mode = "default"
- 
-        out_sig = out_sig.cpu().squeeze(1)
-        ref_sig = ref_sig.cpu().squeeze(1)
+        super().__call__(out_sig, ref_sig, target_sr, initial_sr, initial_lens)
+
+        individual_samples, individual_real_samples = self._process_individual_audios(out_sig, ref_sig, initial_lens)
 
         stft = STFTMag(2048, 512)
         hf = int(1025 * (initial_sr / target_sr))
         
-        batch_size = out_sig.shape[0]
         lsd_hf_list = []
         
-        for i in range(batch_size):
-            sp = torch.log10(stft(ref_sig[i]).square().clamp(1e-8))
-            st = torch.log10(stft(out_sig[i]).square().clamp(1e-8))
+        for sample, real_sample in zip(individual_samples, individual_real_samples):
+            sp = torch.log10(stft(real_sample).square().clamp(1e-8))
+            st = torch.log10(stft(sample).square().clamp(1e-8))
             
             lsd_hf_sample = (sp[hf:, :] - st[hf:, :]).square().mean(dim=0).sqrt().mean()
             lsd_hf_list.append(lsd_hf_sample.item())
-        
-        
-        self.results[self.current_mode]["mean"].append(np.mean(lsd_hf_list))
-        self.results[self.current_mode]["std"].append(np.std(lsd_hf_list))
+
+        self.results[self.current_mode]["val"].append(lsd_hf_list)
+        self.results[self.current_mode]["count"].append(len(lsd_hf_list))
  
-        return np.mean(lsd_hf_list) 
  
 class STOI(Metric):
     name = "STOI"
@@ -377,26 +373,23 @@ class STOI(Metric):
         super().__init__(**kwargs)
         self.sr = sr
  
-    def __call__(self, samples, real_samples, target_sr, initial_sr=None):
-        super().__call__(samples, real_samples, target_sr, initial_sr)
- 
-        real_samples = real_samples.squeeze(1).cpu().numpy()
-        samples = samples.squeeze(1).cpu().numpy()
-        if real_samples.ndim == 1:
-            real_samples = real_samples[None]
-            samples = samples[None]
- 
+    def __call__(self, samples, real_samples, target_sr, initial_sr=None, initial_lens=None):
+        super().__call__(samples, real_samples, target_sr, initial_sr, initial_lens)
+
+        individual_samples, individual_real_samples = self._process_individual_audios(samples, real_samples, initial_lens)
+
         stois = []
-        for s_real, s_fake in zip(real_samples, samples):
-            s = stoi(s_real, s_fake, self.sr, extended=True)
+        for sample, real_sample in zip(individual_samples, individual_real_samples):
+            sample_np = sample.cpu().numpy()
+            real_sample_np = real_sample.cpu().numpy()
+            s = stoi(real_sample_np, sample_np, self.sr, extended=True)
             stois.append(s)
- 
-        self.results[self.current_mode]["mean"].append(np.mean(stois))
-        self.results[self.current_mode]["std"].append(np.std(stois))
- 
-        return np.mean(stois)
- 
- 
+
+        
+        self.results[self.current_mode]["val"].append(stois)
+        self.results[self.current_mode]["count"].append(len(stois))
+
+
 class PESQ(Metric):
     name = "PESQ"
  
@@ -407,29 +400,28 @@ class PESQ(Metric):
         super().__init__(**kwargs)
         self.sr = sr
  
-    def __call__(self, samples, real_samples, target_sr, initial_sr=None):
-        super().__call__(samples, real_samples, target_sr, initial_sr)
- 
-        samples /= samples.abs().max(-1, keepdim=True)[0]
-        real_samples /= real_samples.abs().max(-1, keepdim=True)[0]
-        real_samples = real_samples.squeeze(1).cpu().numpy()
-        samples = samples.squeeze(1).cpu().numpy()
-        if real_samples.ndim == 1:
-            real_samples = real_samples[None]
-            samples = samples[None]
- 
+    def __call__(self, samples, real_samples, target_sr, initial_sr=None, initial_lens=None):
+        super().__call__(samples, real_samples, target_sr, initial_sr, initial_lens)
+
+        individual_samples, individual_real_samples = self._process_individual_audios(samples, real_samples, initial_lens)
+
         pesqs = []
-        for s_real, s_fake in zip(real_samples, samples):
+        for sample, real_sample in zip(individual_samples, individual_real_samples):
+            sample = sample / sample.abs().max() if sample.abs().max() > 0 else sample
+            real_sample = real_sample / real_sample.abs().max() if real_sample.abs().max() > 0 else real_sample
+            
+            sample_np = sample.cpu().numpy()
+            real_sample_np = real_sample.cpu().numpy()
+            
             try:
-                p = pesq(self.sr, s_real, s_fake, mode="wb")
+                p = pesq(self.sr, real_sample_np, sample_np, mode="wb")
             except:
                 p = 1
             pesqs.append(p)
+
+        self.results[self.current_mode]["val"].append(pesqs)
+        self.results[self.current_mode]["count"].append(len(pesqs))
  
-        self.results[self.current_mode]["mean"].append(np.mean(pesqs))
-        self.results[self.current_mode]["std"].append(np.std(pesqs))
- 
-        return np.mean(pesqs)
  
  
 class CSEMetric(Metric):
@@ -440,26 +432,25 @@ class CSEMetric(Metric):
         super().__init__(**kwargs)
         self.func = None
  
-    def __call__(self, samples, real_samples, target_sr, initial_sr=None):
-        super().__call__(samples, real_samples, target_sr, initial_sr)
- 
-        samples /= samples.abs().max(-1, keepdim=True)[0]
-        real_samples /= real_samples.abs().max(-1, keepdim=True)[0]
-        real_samples = real_samples.squeeze(1).cpu().numpy()
-        samples = samples.squeeze(1).cpu().numpy()
-        if real_samples.ndim == 1:
-            real_samples = real_samples[None]
-            samples = samples[None]
- 
+    def __call__(self, samples, real_samples, target_sr, initial_sr=None, initial_lens=None):
+        super().__call__(samples, real_samples, target_sr, initial_sr, initial_lens)
+
+        individual_samples, individual_real_samples = self._process_individual_audios(samples, real_samples, initial_lens)
+
         res = list()
-        for s_real, s_fake in zip(real_samples, samples):
-            r = self.func(s_real, s_fake, target_sr)
+        for sample, real_sample in zip(individual_samples, individual_real_samples):
+            sample = sample / sample.abs().max() if sample.abs().max() > 0 else sample
+            real_sample = real_sample / real_sample.abs().max() if real_sample.abs().max() > 0 else real_sample
+            
+            sample_np = sample.cpu().numpy()
+            real_sample_np = real_sample.cpu().numpy()
+            
+            r = self.func(real_sample_np, sample_np, target_sr)
             res.append(r)
  
-        self.results[self.current_mode]["mean"].append(np.mean(res))
-        self.results[self.current_mode]["std"].append(np.std(res))
+        self.results[self.current_mode]["val"].append(res)
+        self.results[self.current_mode]["count"].append(len(res))
  
-        return np.mean(res)
  
  
 class CSIG(CSEMetric):
@@ -486,15 +477,14 @@ class COVL(CSEMetric):
         self.func = lambda x, y, target_sr: composite_eval(x, y, target_sr)["covl"]
  
  
-def calculate_all_metrics(wavs, reference_wavs, metrics, initial_sr, target_sr):
+def calculate_all_metrics(wavs, reference_wavs, metrics, initial_sr, target_sr, initial_lens):
     scores = {}
     for metric in metrics:
-        metric.__call__(wavs, reference_wavs, target_sr, initial_sr)
+        metric.__call__(wavs, reference_wavs, target_sr, initial_sr, initial_lens)
  
     for metric in metrics:
         results = metric.get_result(f"{initial_sr // 1000}_{target_sr // 1000}")
-        mean_val = results['mean']
-        std_val = results['std']
-        scores[metric.name] = (mean_val, std_val)
- 
+        val = results['val']
+        count = results['count']
+        scores[metric.name] = (val, count)
     return scores

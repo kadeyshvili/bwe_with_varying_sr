@@ -128,17 +128,14 @@ class Inferencer(BaseTrainer):
         batch['generated_wav'] = generated_wavs
         mean_metrics = {}
         if metrics is not None:
-            batch_metrics = calculate_all_metrics(batch['generated_wav'], batch['wav_hr'], self.metrics["inference"], self.config.datasets.test.initial_sr, self.config.datasets.test.target_sr)
-            for k, (mean, std) in batch_metrics.items():
+            batch_metrics = calculate_all_metrics(batch['generated_wav'], batch['wav_hr'], self.metrics["inference"], self.config.datasets.test.initial_sr, self.config.datasets.test.target_sr, batch['initial_len_hr'])
+            for k, (val, count) in batch_metrics.items():
                 if k not in mean_metrics:
-                    mean_metrics[k] = [mean]
+                    mean_metrics[k]= {'val': np.sum(np.array(val).flatten()), 'count': np.sum(np.array(count).flatten())}
                 else:
-                    mean_metrics[k].append(mean)
+                    mean_metrics[k]['val'] += np.sum(np.array(val).flatten())
+                    mean_metrics[k]['count'] += np.sum(np.array(count).flatten())
 
-            for met_name, val in mean_metrics.items():
-                mean_val = np.mean(val)
-                
-                self.evaluation_metrics.update(met_name, mean_val)
 
         batch_size = batch["generated_wav"].shape[0]
 
@@ -182,6 +179,12 @@ class Inferencer(BaseTrainer):
                     part=part,
                     metrics=self.evaluation_metrics,
                 )
+        for metric in self.metrics["inference"]:
+            for mode_key, data in metric.results.items():
+                count = np.sum(np.array(data['count']).flatten())
+                if count > 0:
+                    sum = np.sum(np.array(data['val']).flatten())
+                    self.evaluation_metrics.update(metric.name, sum, count)
 
         return self.evaluation_metrics.result()
     

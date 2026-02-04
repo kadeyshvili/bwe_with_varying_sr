@@ -360,24 +360,27 @@ class BaseTrainer:
                     }
                     self.samples_for_logging[regime_key].append(sample)
                 
-                metrics_to_use = self.metrics['inference']
+                metrics_to_use = [metric for metric in self.metrics['inference'] if metric.name.endswith(regime_key)]
                 batch_metrics = calculate_all_metrics(
                     batch['generated_wav'], 
                     batch['wav_hr'],
                     metrics_to_use, 
                     initial_sr, 
-                    target_sr
+                    target_sr,
+                    batch['initial_len_hr']
                 )
                 
                 if regime_key not in metrics_by_regime:
                     metrics_by_regime[regime_key] = {}
                 
-                for k, (mean, std) in batch_metrics.items():
+                for k, (val, count) in batch_metrics.items():
+
                     if k in metrics_by_regime[regime_key]:
-                        metrics_by_regime[regime_key][k].append(mean)
+                        metrics_by_regime[regime_key][k]['sum'] += np.sum(np.array(val).flatten())
+                        metrics_by_regime[regime_key][k]['count'] += np.sum(np.array(count).flatten())
                     else:
-                        metrics_by_regime[regime_key][k] = [mean]
-                
+                        metrics_by_regime[regime_key][k] = {'sum': np.sum(np.array(val).flatten()), 'count': np.sum(np.array(count).flatten())}
+                    
                 mode_key = regime_key
                 for metric in metrics_to_use:
                     if mode_key in metric.results:
@@ -387,11 +390,11 @@ class BaseTrainer:
             # Log all collected samples from all regimes
             self._log_batch(batch_idx, batch, part)
         
-        # Aggregate metrics by regime
         for regime_key, metrics_dict in metrics_by_regime.items():
-            for metric_name, values in metrics_dict.items():
-                mean_val = np.mean(values)
-                self.evaluation_metrics.update(metric_name, mean_val)
+            for metric_name, inner_dict in metrics_dict.items():
+                sum = inner_dict['sum']
+                count = inner_dict['count']
+                self.evaluation_metrics.update(metric_name, sum, count)
         
         self._log_scalars(self.evaluation_metrics)
         return self.evaluation_metrics.result()

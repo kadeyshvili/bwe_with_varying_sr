@@ -32,7 +32,6 @@ class MetricTracker:
             metrics_to_preserve = [
                 key for key in self._data.index 
                 if any(regime in key for regime in ["_4_8", "_8_16", "_8_24", "_4_16", "_4_24", "_24_48", "_8_48"])
-                and not any(loss_name in key for loss_name in ["loss", "grad_norm"])
             ]
  
             for col in self._data.columns:
@@ -44,7 +43,7 @@ class MetricTracker:
                 self._data[col].values[:] = 0
  
 
-    def update(self, key, value, n=1):
+    def update(self, key, sum, count=1):
         """
         Update metrics DataFrame with new value.
 
@@ -58,8 +57,8 @@ class MetricTracker:
         if key not in self._data.index:
             new_row = pd.DataFrame([[0, 0, 0.0]], index=[key], columns=self._data.columns)
             self._data = pd.concat([self._data, new_row])
-        self._data.loc[key, "total"] += value * n
-        self._data.loc[key, "counts"] += n
+        self._data.loc[key, "total"] += sum
+        self._data.loc[key, "counts"] += count
         self._data.loc[key, "average"] = self._data.total[key] / self._data.counts[key]
 
     def avg(self, key):

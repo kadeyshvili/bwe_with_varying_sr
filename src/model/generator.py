@@ -339,26 +339,8 @@ class A2AHiFiPlusGenerator(HiFiPlusGenerator):
         pad_size =  closest_size - current_size
         padded_x = torch.nn.functional.pad(initial_x, (0, pad_size))
         expected_reference_len = (closest_size * target_sr) // initial_sr
-
-
-        if batch['mode'] == 'train':
-            x_reference = batch['reference_wav']
-        else:
-            resampled_audio = []
-            for i in range(batch_size):
-                x_single = padded_x[i].cpu().numpy()
-                x_resampled = librosa.resample(
-                    x_single, orig_sr=initial_sr, target_sr=target_sr, res_type="polyphase"
-                )
-
-                target_length_resempled = x_single.shape[-1] * (target_sr // 2 // initial_sr)
-                if len(x_resampled) > target_length_resempled:
-                    x_resampled = x_resampled[:target_length_resempled]
-                
-                resampled_audio.append(x_resampled)
-            x_reference = np.stack(resampled_audio)
-            x_reference = torch.tensor(x_reference, dtype=padded_x.dtype).to(x.device)
-
+        x_reference = batch['reference_wav']
+    
         current_reference_len = x_reference.shape[-1]
         pad_reference_len = expected_reference_len - current_reference_len
 

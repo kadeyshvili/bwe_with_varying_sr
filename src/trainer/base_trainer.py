@@ -166,14 +166,18 @@ class BaseTrainer:
         and saving the best checkpoint).
         """
         not_improved_count = 0
+
+        # Log baseline metrics before any training (step 0)
+        if self.start_epoch == 1:
+            self.logger.info("Logging baseline metrics before training (step 0)...")
+            for part, dataloader in self.evaluation_dataloaders.items():
+                val_logs = self._evaluation_epoch(0, part, dataloader)
+                for key, value in val_logs.items():
+                    self.logger.info(f"    [pre-train] {part}_{key:15s}: {value}")
+
         for epoch in range(self.start_epoch, self.epochs + 1):
             logs = {"epoch": epoch}
-            if epoch == self.start_epoch:
-                for part, dataloader in self.evaluation_dataloaders.items():
-                    val_logs = self._evaluation_epoch(epoch, part, dataloader)
-                    logs.update(**{f"{part}_{name}": value for name, value in val_logs.items()})
-                self._log_scalars(self.evaluation_metrics)
-                
+
 
             self._last_epoch = epoch
             result = self._train_epoch(epoch)

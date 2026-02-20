@@ -167,10 +167,16 @@ class BaseTrainer:
         """
         not_improved_count = 0
         for epoch in range(self.start_epoch, self.epochs + 1):
+            logs = {"epoch": epoch}
+            if epoch == self.start_epoch:
+                for part, dataloader in self.evaluation_dataloaders.items():
+                    val_logs = self._evaluation_epoch(epoch, part, dataloader)
+                    logs.update(**{f"{part}_{name}": value for name, value in val_logs.items()})
+                self._log_scalars(self.evaluation_metrics)
+                
+
             self._last_epoch = epoch
             result = self._train_epoch(epoch)
-
-            logs = {"epoch": epoch}
             logs.update(result)
 
             for key, value in logs.items():

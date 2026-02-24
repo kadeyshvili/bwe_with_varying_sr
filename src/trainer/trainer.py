@@ -3,7 +3,6 @@ from src.logger.utils import plot_spectrogram
 from src.metrics.tracker import MetricTracker
 from src.trainer.base_trainer import BaseTrainer
 import torch.nn.functional as F
-from src.model import HiFiGANWithMRF
 from src.model.melspec import MelSpectrogram
 from src.utils.sr_utils import get_sr_ratio, get_regime_key
 from hydra.utils import instantiate
@@ -40,11 +39,8 @@ class Trainer(BaseTrainer):
         target_wav = batch['wav_hr']
         initial_sr = batch['initial_sr']
         target_sr = batch['target_sr']
-        model_instance = instantiate(self.config.model)
-        if isinstance(model_instance, HiFiGANWithMRF):
-            wav_fake = self.model.generator(initial_wav, initial_sr, target_sr)
-        else:
-            wav_fake = self.model.generator(initial_wav, **batch)
+
+        wav_fake = self.model.generator(initial_wav, **batch)
 
         if target_wav.shape != wav_fake.shape:
             wav_fake = torch.stack([F.pad(wav, (0, target_wav.shape[2] - wav_fake.shape[2]), value=0) for wav in wav_fake])

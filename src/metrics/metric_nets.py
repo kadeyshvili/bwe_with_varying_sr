@@ -1,9 +1,18 @@
 from collections import OrderedDict
+import os
+import logging
+
+os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+os.environ.setdefault("TRANSFORMERS_NO_ADVISORY_WARNINGS", "1")
+os.environ.setdefault("DISABLE_TQDM", "1")
 
 import numpy as np
 import torch
 import torch.nn as nn
 from transformers import Wav2Vec2Model, Wav2Vec2Processor
+
+logging.getLogger("transformers").setLevel(logging.ERROR)
+logging.getLogger("huggingface_hub").setLevel(logging.ERROR)
 
 
 def extract_prefix(prefix, weights):
@@ -19,7 +28,7 @@ class Wav2Vec2MOS(nn.Module):
 
     def __init__(self, path, freeze=True):
         super().__init__()
-        self.encoder = Wav2Vec2Model.from_pretrained("facebook/wav2vec2-base")
+        self.encoder = Wav2Vec2Model.from_pretrained("facebook/wav2vec2-base", ignore_mismatched_sizes=True)
         self.freeze = freeze
 
         self.dense = nn.Sequential(

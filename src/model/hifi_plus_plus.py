@@ -1,5 +1,5 @@
 import torch.nn as nn
-from src.model.generator import A2AHiFiPlusPlus
+from src.model.generator import A2AHiFiPlusGenerator as A2AHiFiPlusPlus
 from src.model.discriminator_p import MultiPeriodDiscriminator
 from src.model.discriminator_s import MultiScaleDiscriminator
 

@@ -40,7 +40,7 @@ class MetricTracker:
                         self._data.loc[key, col] = 0
         else:
             for col in self._data.columns:
-                self._data[col].values[:] = 0
+                self._data.loc[:, col] = 0
  
 
     def update(self, key, sum, count=1):

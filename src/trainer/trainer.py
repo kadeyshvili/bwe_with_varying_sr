@@ -111,8 +111,8 @@ class Trainer(BaseTrainer):
                 mel_spec_loss, gen_loss =\
                     self.criterion.generator_loss_3(batch)
 
-
-        torch.cuda.synchronize()
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
         if self.is_train:
             self._clip_grad_norm(self.model.generator)
             gen_loss.backward()

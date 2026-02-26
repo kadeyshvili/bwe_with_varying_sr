@@ -12,8 +12,6 @@ from src.model.melspec import MelSpectrogram
 from src.utils.sr_utils import get_sr_ratio, get_intermediate_sr, create_band_mask, get_num_blocks
 
 
-mel_basis = {}
-hann_window = {}
 
 def dynamic_range_compression_torch(x, C=1, clip_val=1e-5):
     return torch.log(torch.clamp(x, min=clip_val) * C)
@@ -23,95 +21,135 @@ def spectral_normalize_torch(magnitudes):
     return output
 
 
+def get_padding(kernel_size, dilation=1):
+    return int((kernel_size*dilation - dilation)/2)
+
+
+def dynamic_range_decompression_torch(x, C=1):
+    return torch.exp(x) / C
+
+
+def spectral_de_normalize_torch(magnitudes):
+    output = dynamic_range_decompression_torch(magnitudes)
+    return output
+
+
 class GRN(nn.Module):
+    """GRN (Global Response Normalization) layer"""
+
     def __init__(self, dim):
         super().__init__()
-        self.gamma = nn.Parameter(torch.zeros(1, dim, 1, 1))
-        self.beta = nn.Parameter(torch.zeros(1, dim, 1, 1))
+        self.gamma = nn.Parameter(torch.zeros(1, 1, dim))
+        self.beta = nn.Parameter(torch.zeros(1, 1, dim))
 
     def forward(self, x):
         Gx = torch.norm(x, p=2, dim=1, keepdim=True)
-        Nx = Gx / (Gx.mean(dim=(2, 3), keepdim=True) + 1e-6)
+        Nx = Gx / (Gx.mean(dim=-1, keepdim=True) + 1e-6)
         return self.gamma * (x * Nx) + self.beta + x
 
-
-class ConvNeXtBlock2D(nn.Module):
-    def __init__(self, dim, intermediate_dim):
+class ConvNeXtBlock(nn.Module):
+    def __init__(
+        self,
+        dim: int,
+        intermediate_dim: int,
+        layer_scale_init_value=None,
+        adanorm_num_embeddings=None,
+    ):
         super().__init__()
-
-        self.dwconv = nn.Conv2d(
-            dim,
-            dim,
-            kernel_size=7,
-            padding=3,
-            groups=dim,
-        )
+        self.dwconv = nn.Conv1d(
+            dim, dim, kernel_size=7, padding=3, groups=dim
+        )  # depthwise conv
+        self.adanorm = adanorm_num_embeddings is not None
 
         self.norm = nn.LayerNorm(dim, eps=1e-6)
-
-        self.pwconv1 = nn.Linear(dim, intermediate_dim)
+        self.pwconv1 = nn.Linear(
+            dim, intermediate_dim
+        )  # pointwise/1x1 convs, implemented with linear layers
         self.act = nn.GELU()
         self.grn = GRN(intermediate_dim)
         self.pwconv2 = nn.Linear(intermediate_dim, dim)
 
-    def forward(self, x):
-        residual = x  # (B, C, F, T)
-
+    def forward(self, x, cond_embedding_id=None):
+        residual = x
         x = self.dwconv(x)
-
-        # LayerNorm needs (B, F, T, C)
-        x = x.permute(0, 2, 3, 1)
-        x = self.norm(x)
-
+        x = x.transpose(1, 2)  # (B, C, T) -> (B, T, C)
+        if self.adanorm:
+            assert cond_embedding_id is not None
+            x = self.norm(x, cond_embedding_id)
+        else:
+            x = self.norm(x)
         x = self.pwconv1(x)
         x = self.act(x)
-        x = x.permute(0, 3, 1, 2)
         x = self.grn(x)
-
-        x = x.permute(0, 2, 3, 1)
         x = self.pwconv2(x)
 
-        x = x.permute(0, 3, 1, 2)
+        x = x.transpose(1, 2)  # (B, T, C) -> (B, C, T)
 
-        return residual + x
+        x = residual + x
+        return x
 
-def stft(y, n_fft, num_mels, sampling_rate, hop_size, win_size, fmin, fmax, center=False,):
+mel_cache = {}
+inv_mel_cache = {}
+window_cache = {}
+
+def stft(
+    y,
+    n_fft,
+    num_mels,
+    sampling_rate,
+    hop_size,
+    win_size,
+    fmin=0.0,
+    fmax=None,
+    center=True,
+):
+    global mel_cache, inv_mel_cache, window_cache
     if isinstance(y, np.ndarray):
         y = torch.from_numpy(y).unsqueeze(0)
-    if fmin is None:
-        fmin=0.0
+
+    device = y.device
+
     if fmax is None:
         fmax = float(sampling_rate) / 2
 
-    global mel_basis, hann_window
-    if fmax not in mel_basis:
-        mel = librosa_mel_fn(sr=sampling_rate, n_fft=n_fft, n_mels=num_mels,
-                             fmin=fmin, fmax=fmax)
-        mel_basis[str(fmax) + "_" + str(y.device)] = (
-            torch.from_numpy(mel).float().to(y.device)
+    cache_key = f"{sampling_rate}_{n_fft}_{num_mels}_{fmin}_{fmax}_{win_size}_{device}"
+    if cache_key not in mel_cache:
+        mel = librosa_mel_fn(
+            sr=sampling_rate,
+            n_fft=n_fft,
+            n_mels=num_mels,
+            fmin=fmin,
+            fmax=fmax,
         )
-        hann_window[str(y.device)] = torch.hann_window(win_size).to(y.device)
+        mel_basis = torch.from_numpy(mel).float().to(device)
+        inv_basis = mel_basis.pinverse()
 
-    y = torch.nn.functional.pad(
-        y.unsqueeze(1),
-        (int((n_fft - hop_size) / 2), int((n_fft - hop_size) / 2)),
-        mode="reflect",
-    )
-    y = y.squeeze(1)
+        mel_cache[cache_key] = mel_basis
+        inv_mel_cache[cache_key] = inv_basis
+        window_cache[cache_key] = torch.hann_window(win_size).to(device)
 
-    freq_and_time  = torch.stft(
+    mel_basis = mel_cache[cache_key].to(y.device)
+    inv_basis = inv_mel_cache[cache_key].to(y.device)
+    window = window_cache[cache_key]
+    spec_complex = torch.stft(
         y,
-        n_fft,
+        n_fft=n_fft,
         hop_length=hop_size,
         win_length=win_size,
-        window=hann_window[str(y.device)],
+        window=window,
         center=center,
-        pad_mode="reflect",
-        normalized=False,
-        onesided=True,
         return_complex=True,
-    )
-    return freq_and_time
+    )  # (B, F, T)
+
+    mag = spec_complex.abs().to(y.device)  # (B, F, T)
+
+    mel_spec = mel_basis @ mag  # (B, num_mels, T)
+    mel_spec = spectral_normalize_torch(mel_spec).to(y.device)
+
+    mel_denorm = spectral_de_normalize_torch(mel_spec).to(y.device)
+    linear_mag = inv_basis @ mel_denorm  # (B, F, T)
+
+    return mel_spec, linear_mag
 
 def closest_power_of_two(n):
     return 1 << (n - 1).bit_length()
@@ -355,57 +393,60 @@ class A2AHiFiPlusGenerator(HiFiPlusGenerator):
             )
 
 
-        self.vocoder_dim = 128
-        self.vocoder_num_layers = 8
-        self.vocoder_intermediate_dim = 4 * self.vocoder_dim
-        self.vocoder_n_fft = 1024
-        self.vocoder_hop_size = 256
-        self.vocoder_win_size = 1024
 
-        self.mag_input_conv = nn.Conv2d(1, self.vocoder_dim, kernel_size=3, padding=1)
+        self.PSP_input_conv = nn.Conv1d(80, 512, 7, 1, padding=get_padding(7, 1),)
 
-        self.mag_blocks = nn.ModuleList(
+        self.PSP_output_R_conv = nn.Conv1d( 512, 1024 // 2 + 1, 7, 1, padding=get_padding(7, 1),)
+        self.PSP_output_I_conv = nn.Conv1d( 512, 1024 // 2 + 1, 7, 1, padding=get_padding(7, 1),)
+
+        self.dim = 512
+        self.num_layers = 8
+        self.adanorm_num_embeddings = None
+        self.intermediate_dim = 1536
+        self.norm = nn.LayerNorm(self.dim, eps=1e-6)
+        self.norm2 = nn.LayerNorm(self.dim, eps=1e-6)
+        layer_scale_init_value = 1 / self.num_layers
+        self.convnext = nn.ModuleList(
             [
-                ConvNeXtBlock2D(self.vocoder_dim, self.vocoder_intermediate_dim)
-                for _ in range(self.vocoder_num_layers)
+                ConvNeXtBlock(
+                    dim=self.dim,
+                    intermediate_dim=self.intermediate_dim,
+                    layer_scale_init_value=layer_scale_init_value,
+                    adanorm_num_embeddings=self.adanorm_num_embeddings,
+                )
+                for _ in range(self.num_layers)
             ]
         )
-
-        self.mag_output_conv = nn.Conv2d(self.vocoder_dim, 1, kernel_size=3, padding=1)
-
-        self.phase_input_conv = nn.Conv2d(1, self.vocoder_dim, kernel_size=3, padding=1)
-
-        self.phase_blocks = nn.ModuleList(
+        self.convnext2 = nn.ModuleList(
             [
-                ConvNeXtBlock2D(self.vocoder_dim, self.vocoder_intermediate_dim)
-                for _ in range(self.vocoder_num_layers)
+                ConvNeXtBlock(
+                    dim=513,
+                    intermediate_dim=self.intermediate_dim,
+                    layer_scale_init_value=layer_scale_init_value,
+                    adanorm_num_embeddings=self.adanorm_num_embeddings,
+                )
+                for _ in range(1)
             ]
         )
+        self.final_layer_norm = nn.LayerNorm(self.dim, eps=1e-6)
+        self.final_layer_norm2 = nn.LayerNorm(self.dim, eps=1e-6)
+        # self.apply(self._init_weights)
 
-        self.phase_output_conv = nn.Conv2d(self.vocoder_dim, 1, kernel_size=3, padding=1)
-
-        for m in [self.mag_input_conv, self.mag_output_conv,
-                  self.phase_input_conv, self.phase_output_conv,
-                  *self.mag_blocks, *self.phase_blocks]:
-            m.apply(self._init_weights)
-
-    def _init_weights(self, m):
-        if isinstance(m, (nn.Conv2d, nn.Linear)):
-            nn.init.trunc_normal_(m.weight, std=0.02)
-            if m.bias is not None:
-                nn.init.constant_(m.bias, 0)
-
+    # def _init_weights(self, m):
+    #     if isinstance(m, (nn.Conv1d, nn.Linear)):
+    #         nn.init.trunc_normal_(m.weight, std=0.02)
+    #         nn.init.constant_(m.bias, 0)
     
     
 
     @staticmethod
     def get_stft(x, sampling_rate):
-        # x: (B, 1, T) -> squeeze -> (B, T) -> stft -> (B, 513, T_frames)
-        x = x.squeeze(1)
-        x = stft(x, n_fft=1024, num_mels=80, sampling_rate=sampling_rate, hop_size=256, win_size=1024, fmin=None, fmax=None)
-        return x
+        shape = x.shape
+        x = x.view(shape[0] * shape[1], shape[2])
+        mel, inv_mel = stft(x, n_fft=1024, num_mels=80, sampling_rate=sampling_rate, hop_size=256, win_size=1024)
+        return inv_mel.abs().clamp_min(1e-5), mel
     
-    
+
     
     def apply_waveunet_a2a(self, x, x_reference):
         if self.waveunet_input == "waveform":
@@ -488,44 +529,38 @@ class A2AHiFiPlusGenerator(HiFiPlusGenerator):
             raise ValueError(f"Unsupported number of blocks: {num_blocks}. Only 1 or 2 blocks are supported.")
 
 
-        spec = self.get_stft(x_res, sampling_rate=target_sr)
+        inv_amp, mel = self.get_stft(x_res, sampling_rate=target_sr)
 
-        mag = torch.abs(spec)
-        phase = torch.angle(spec)
+        
+        logamp = inv_amp.log()
+        for conv_block in self.convnext2:
+            logamp = conv_block(logamp, cond_embedding_id=None)
 
-        mag = mag.unsqueeze(1)
-        phase = phase.unsqueeze(1)
+        pha = self.PSP_input_conv(mel)
+        pha = self.norm(pha.transpose(1, 2))
+        pha = pha.transpose(1, 2)
+        for conv_block in self.convnext:
+            pha = conv_block(pha, cond_embedding_id=None)
+        pha = self.final_layer_norm(pha.transpose(1, 2))
+        pha = pha.transpose(1, 2)
+        R = self.PSP_output_R_conv(pha)
+        I = self.PSP_output_I_conv(pha)
 
-        mag_feat = self.mag_input_conv(mag)
-        for block in self.mag_blocks:
-            mag_feat = block(mag_feat)
-        mag_out = self.mag_output_conv(mag_feat)
+        pha = torch.atan2(I, R)
 
-        phase_feat = self.phase_input_conv(phase)
-        for block in self.phase_blocks:
-            phase_feat = block(phase_feat)
-        phase_out = self.phase_output_conv(phase_feat)
+        rea = torch.exp(logamp) * torch.cos(pha)
+        imag = torch.exp(logamp) * torch.sin(pha)
 
-        mag_pred = mag + mag_out
-        phase_pred = phase + phase_out
-
-        real_pred = mag_pred * torch.cos(phase_pred)
-        imag_pred = mag_pred * torch.sin(phase_pred)
-
-        complex_spec = torch.complex(
-            real_pred.squeeze(1),
-            imag_pred.squeeze(1)
-        )
+        spec = torch.complex(rea, imag)
 
         audio = torch.istft(
-            complex_spec,
-            self.vocoder_n_fft,
-            hop_length=self.vocoder_hop_size,
-            win_length=self.vocoder_win_size,
-            window=torch.hann_window(self.vocoder_win_size).to(spec.device),
+            spec,
+            1024,
+            hop_length=256,
+            win_length=1024,
+            window=torch.hann_window(1024).to(mel.device),
             center=True,
         )
         x_res = audio.unsqueeze(1)
-
         return x_res[..., :target_size]
     

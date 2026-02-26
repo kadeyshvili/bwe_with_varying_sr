@@ -1,6 +1,6 @@
 train:
   _target_: src.datasets.VCTKDataset
-  dataset_split_file: "src/VCTK_split/training.txt"
+  dataset_split_file: "src/VCTK_split/test.txt"
   wavs_dir_8khz: /Users/polinakadeishvili/diploma/8khz_only_test
   wavs_dir_24khz:  /Users/polinakadeishvili/diploma/16khz_only_test
   segment_size: 32768
@@ -9,7 +9,7 @@ train:
   mode: 'train'
 val:
   _target_: src.datasets.VCTKDataset
-  dataset_split_file: "src/VCTK_split/validation.txt"
+  dataset_split_file: "src/VCTK_split/test.txt"
   wavs_dir_8khz: /Users/polinakadeishvili/diploma/8khz_only_test
   wavs_dir_24khz:  /Users/polinakadeishvili/diploma/16khz_only_test
   segment_size: 32768

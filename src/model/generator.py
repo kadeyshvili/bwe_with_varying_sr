@@ -140,16 +140,7 @@ def stft(
         center=center,
         return_complex=True,
     )  # (B, F, T)
-
-    mag = spec_complex.abs().to(y.device)  # (B, F, T)
-
-    mel_spec = mel_basis @ mag  # (B, num_mels, T)
-    mel_spec = spectral_normalize_torch(mel_spec).to(y.device)
-
-    mel_denorm = spectral_de_normalize_torch(mel_spec).to(y.device)
-    linear_mag = inv_basis @ mel_denorm  # (B, F, T)
-
-    return mel_spec, linear_mag
+    return spec_complex
 
 def closest_power_of_two(n):
     return 1 << (n - 1).bit_length()
@@ -394,17 +385,10 @@ class A2AHiFiPlusGenerator(HiFiPlusGenerator):
 
 
 
-        self.PSP_input_conv = nn.Conv1d(80, 512, 7, 1, padding=get_padding(7, 1),)
-
-        self.PSP_output_R_conv = nn.Conv1d( 512, 1024 // 2 + 1, 7, 1, padding=get_padding(7, 1),)
-        self.PSP_output_I_conv = nn.Conv1d( 512, 1024 // 2 + 1, 7, 1, padding=get_padding(7, 1),)
-
-        self.dim = 512
+        self.dim = 513
         self.num_layers = 8
         self.adanorm_num_embeddings = None
         self.intermediate_dim = 1536
-        self.norm = nn.LayerNorm(self.dim, eps=1e-6)
-        self.norm2 = nn.LayerNorm(self.dim, eps=1e-6)
         layer_scale_init_value = 1 / self.num_layers
         self.convnext = nn.ModuleList(
             [
@@ -420,7 +404,7 @@ class A2AHiFiPlusGenerator(HiFiPlusGenerator):
         self.convnext2 = nn.ModuleList(
             [
                 ConvNeXtBlock(
-                    dim=513,
+                    dim=self.dim,
                     intermediate_dim=self.intermediate_dim,
                     layer_scale_init_value=layer_scale_init_value,
                     adanorm_num_embeddings=self.adanorm_num_embeddings,
@@ -430,12 +414,13 @@ class A2AHiFiPlusGenerator(HiFiPlusGenerator):
         )
         self.final_layer_norm = nn.LayerNorm(self.dim, eps=1e-6)
         self.final_layer_norm2 = nn.LayerNorm(self.dim, eps=1e-6)
-        # self.apply(self._init_weights)
+        self.convnext.apply(self._init_weights)
+        self.convnext2.apply(self._init_weights)
 
-    # def _init_weights(self, m):
-    #     if isinstance(m, (nn.Conv1d, nn.Linear)):
-    #         nn.init.trunc_normal_(m.weight, std=0.02)
-    #         nn.init.constant_(m.bias, 0)
+    def _init_weights(self, m):
+        if isinstance(m, (nn.Conv1d, nn.Linear)):
+            nn.init.trunc_normal_(m.weight, std=0.02)
+            nn.init.constant_(m.bias, 0)
     
     
 
@@ -443,8 +428,8 @@ class A2AHiFiPlusGenerator(HiFiPlusGenerator):
     def get_stft(x, sampling_rate):
         shape = x.shape
         x = x.view(shape[0] * shape[1], shape[2])
-        mel, inv_mel = stft(x, n_fft=1024, num_mels=80, sampling_rate=sampling_rate, hop_size=256, win_size=1024)
-        return inv_mel.abs().clamp_min(1e-5), mel
+        complex_spec = stft(x, n_fft=1024, num_mels=80, sampling_rate=sampling_rate, hop_size=256, win_size=1024)
+        return complex_spec
     
 
     
@@ -529,36 +514,27 @@ class A2AHiFiPlusGenerator(HiFiPlusGenerator):
             raise ValueError(f"Unsupported number of blocks: {num_blocks}. Only 1 or 2 blocks are supported.")
 
 
-        inv_amp, mel = self.get_stft(x_res, sampling_rate=target_sr)
+        complex_spec = self.get_stft(x_res, sampling_rate=target_sr)
 
-        
-        logamp = inv_amp.log()
-        for conv_block in self.convnext2:
-            logamp = conv_block(logamp, cond_embedding_id=None)
+        real = complex_spec.real   # (B, F, T)
+        imag = complex_spec.imag   # (B, F, T)
 
-        pha = self.PSP_input_conv(mel)
-        pha = self.norm(pha.transpose(1, 2))
-        pha = pha.transpose(1, 2)
         for conv_block in self.convnext:
-            pha = conv_block(pha, cond_embedding_id=None)
-        pha = self.final_layer_norm(pha.transpose(1, 2))
-        pha = pha.transpose(1, 2)
-        R = self.PSP_output_R_conv(pha)
-        I = self.PSP_output_I_conv(pha)
+            real = conv_block(real, cond_embedding_id=None)
+        real = self.final_layer_norm(real.transpose(1, 2)).transpose(1, 2)
 
-        pha = torch.atan2(I, R)
+        for conv_block in self.convnext2:
+            imag = conv_block(imag, cond_embedding_id=None)
+        imag = self.final_layer_norm2(imag.transpose(1, 2)).transpose(1, 2)
 
-        rea = torch.exp(logamp) * torch.cos(pha)
-        imag = torch.exp(logamp) * torch.sin(pha)
-
-        spec = torch.complex(rea, imag)
+        spec = torch.complex(real, imag)
 
         audio = torch.istft(
             spec,
             1024,
             hop_length=256,
             win_length=1024,
-            window=torch.hann_window(1024).to(mel.device),
+            window=torch.hann_window(1024).to(x_res.device),
             center=True,
         )
         x_res = audio.unsqueeze(1)

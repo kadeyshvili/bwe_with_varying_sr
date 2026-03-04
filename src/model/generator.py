@@ -379,7 +379,7 @@ class A2AHiFiPlusGenerator(HiFiPlusGenerator):
         elif self.waveunet_input == "both":
             self.waveunet_conv_pre = weight_norm(
                 nn.Conv1d(
-                    1 + self.hifi.out_channels, self.hifi.out_channels, 1
+                    2, self.hifi.out_channels, 1
                 )
             )
 
@@ -538,5 +538,10 @@ class A2AHiFiPlusGenerator(HiFiPlusGenerator):
             center=True,
         )
         x_res = audio.unsqueeze(1)
+        if self.use_waveunet:
+            x_res = self.apply_waveunet_a2a(x_res, padded_reference)
+
+            x_res = self.conv_post(x_res)
+            x_res = torch.tanh(x_res)
         return x_res[..., :target_size]
     

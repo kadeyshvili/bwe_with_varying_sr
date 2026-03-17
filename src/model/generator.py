@@ -8,7 +8,6 @@ from librosa.filters import mel as librosa_mel_fn
 import numpy as np
 import src.utils.upsampling_utils as upsampling_utils
 import librosa
-from src.model.melspec import MelSpectrogram
 from src.utils.sr_utils import get_sr_ratio, get_intermediate_sr, create_band_mask, get_num_blocks
 
 
@@ -145,53 +144,41 @@ def stft(
 def closest_power_of_two(n):
     return 1 << (n - 1).bit_length()
 
-
-
-class HiFiPlusGenerator(torch.nn.Module):
+class A2AHiFiPlusGenerator(torch.nn.Module):
     def __init__(
         self,
-        hifi_resblock="1",
-        hifi_upsample_rates=(8, 8, 2, 2),
-        hifi_upsample_kernel_sizes=(16, 16, 4, 4),
-        hifi_upsample_initial_channel=128,
-        hifi_resblock_kernel_sizes=(3, 7, 11),
-        hifi_resblock_dilation_sizes=((1, 3, 5), (1, 3, 5), (1, 3, 5)),
-        hifi_input_channels=128,
-        hifi_conv_pre_kernel_size=1,
-
-        upsample_block_rates=[2, 2],
         upsample_init_channels = 1,
+        upsample_block_rates=[2, 2],
         upsample_block_kernel_sizes=[4, 4], 
-        kernel_sizes_mrf = [3, 5, 7],
-        dilations_mrf = [
-            [[1, 3, 5], [1, 3, 5]],
-            [[1, 3], [1, 3]],
-            [[1], [1]]
-        ],
+
 
         residual_channels=64,
         bsft_channels=64,
         nwstack1_blocks=1,
         nwstack2_blocks=1,
 
-        use_spectralunet=True,
-        spectralunet_block_widths=(8, 16, 24, 32, 64),
-        spectralunet_block_depth=5,
-        spectralunet_positional_encoding=True,
-
         use_waveunet=True,
         waveunet_block_widths=(10, 20, 40, 80),
         waveunet_block_depth=4,
+        waveunet_channels=8,
+
+        convnext_dim = 513,
+        num_layers_convnext_real = 8,
+        num_layers_convnext_imag = 1,
+        adanorm_num_embeddings = None,
+        intermediate_dim_convnext = 1536,
 
 
         norm_type: Literal["weight", "spectral"] = "weight",
         use_skip_connect=True,
+
+        waveunet_input: Literal["waveform", "hifi", "both"] = "both",
     ):
         super().__init__()
+
         self.norm = dict(weight=weight_norm, spectral=spectral_norm)[norm_type]
         self.norm_type = norm_type
 
-        self.use_spectralunet = use_spectralunet
         self.use_waveunet = use_waveunet
 
         self.use_skip_connect = use_skip_connect
@@ -200,172 +187,27 @@ class HiFiPlusGenerator(torch.nn.Module):
         self.upsampling_block_x3 = upsampling_utils.UpsampleThreeTimes(upsample_init_channels)
         self.nw_stack1 = upsampling_utils.NUWaveStack(residual_channels, bsft_channels, n_blocks=nwstack1_blocks)
         self.nw_stack2 = upsampling_utils.NUWaveStack(residual_channels, bsft_channels, n_blocks=nwstack2_blocks)
-        if kernel_sizes_mrf is not None:
-            self.upsampling_block = upsampling_utils.UpsampleTwiceWithMRF(hifi_upsample_initial_channel, upsample_block_rates, \
-                                                               upsample_block_kernel_sizes, kernel_sizes_mrf, dilations_mrf)
-        self.hifi = upsampling_utils.HiFiUpsampling(
-            resblock=hifi_resblock,
-            upsample_initial_channel=hifi_upsample_initial_channel,
-            resblock_kernel_sizes=hifi_resblock_kernel_sizes,
-            resblock_dilation_sizes=hifi_resblock_dilation_sizes,
-            input_channels=hifi_input_channels,
-            conv_pre_kernel_size=hifi_conv_pre_kernel_size,
-            norm_type=norm_type,
-        )
-        ch = self.hifi.out_channels
+        
+        self.waveunet_channels = waveunet_channels
 
-        if self.use_spectralunet:
-            self.spectralunet = upsampling_utils.SpectralUNet(
-                block_widths=spectralunet_block_widths,
-                block_depth=spectralunet_block_depth,
-                positional_encoding=spectralunet_positional_encoding,
-                norm_type=norm_type,
-            )
-        else:
-            self.conv = nn.Conv1d(
-                in_channels=513, 
-                out_channels=128, 
-                kernel_size=1,
-                stride=1,
-                padding=0
-            )
 
         if self.use_waveunet:
             self.waveunet = upsampling_utils.MultiScaleResnet(
                 waveunet_block_widths,
                 waveunet_block_depth,
                 mode="waveunet_k5",
-                out_width=ch,
-                in_width=ch,
+                out_width=waveunet_channels,
+                in_width=waveunet_channels,
                 norm_type=norm_type
             )
 
         self.waveunet_skip_connect = None
         self.spectralmasknet_skip_connect = None
         if self.use_skip_connect:
-            self.make_waveunet_skip_connect(ch)
+            self.make_waveunet_skip_connect(waveunet_channels)
 
         self.conv_post = None
-        self.make_conv_post(ch)
-
-    def make_waveunet_skip_connect(self, ch):
-        self.waveunet_skip_connect = self.norm(nn.Conv1d(ch, ch, 1, 1))
-        self.waveunet_skip_connect.weight.data = torch.eye(ch, ch).unsqueeze(-1)
-        self.waveunet_skip_connect.bias.data.fill_(0.0)
-
-
-    def make_conv_post(self, ch):
-        self.conv_post = self.norm(nn.Conv1d(ch, 1, 7, 1, padding=3))
-        self.conv_post.apply(upsampling_utils.init_weights)
-
-    def apply_spectralunet(self, x_reference):
-        if self.use_spectralunet:
-            orig_length = x_reference.shape[-1]
-            pad_size = (
-                closest_power_of_two(orig_length) - orig_length
-            )
-            if pad_size > 0:
-                x = torch.nn.functional.pad(x_reference, (0, pad_size))
-            else:
-                x = x_reference
-        
-            x_mag = self.spectralunet(x)
-            x_mag = x_mag[..., :orig_length]
-        else:
-            x = x_reference.squeeze(1)
-        return x_mag
-
-    def apply_waveunet(self, x):
-        x_a = x
-        x = self.waveunet(x_a)
-        if self.use_skip_connect:
-            x += self.waveunet_skip_connect(x_a)
-        return x
-
-
-
-    def forward(self, x_reference):
-        x = self.apply_spectralunet(x_reference)
-        x = self.hifi(x)
-        if self.use_waveunet:
-            x = self.apply_waveunet(x)
-
-        x = self.conv_post(x)
-        x = torch.tanh(x)
-
-        return x
-
-class A2AHiFiPlusGenerator(HiFiPlusGenerator):
-    def __init__(
-        self,
-        hifi_resblock="1",
-        hifi_upsample_rates=(8, 8, 2, 2),
-        hifi_upsample_kernel_sizes=(16, 16, 4, 4),
-        hifi_upsample_initial_channel=128,
-        hifi_resblock_kernel_sizes=(3, 7, 11),
-        hifi_resblock_dilation_sizes=((1, 3, 5), (1, 3, 5), (1, 3, 5)),
-        hifi_input_channels=128,
-        hifi_conv_pre_kernel_size=1,
-
-        upsample_init_channels = 1,
-        upsample_block_rates=[2, 2],
-        upsample_block_kernel_sizes=[4, 4], 
-
-
-        residual_channels=64,
-        bsft_channels=64,
-        nwstack1_blocks=1,
-        nwstack2_blocks=1,
-
-        use_spectralunet=True,
-        spectralunet_block_widths=(8, 16, 24, 32, 64),
-        spectralunet_block_depth=5,
-        spectralunet_positional_encoding=True,
-
-        use_waveunet=True,
-        waveunet_block_widths=(10, 20, 40, 80),
-        waveunet_block_depth=4,
-
-
-        norm_type: Literal["weight", "spectral"] = "weight",
-        use_skip_connect=True,
-
-        waveunet_input: Literal["waveform", "hifi", "both"] = "both",
-    ):
-        super().__init__(
-            hifi_resblock=hifi_resblock,
-            hifi_upsample_rates=hifi_upsample_rates,
-            hifi_upsample_kernel_sizes=hifi_upsample_kernel_sizes,
-            hifi_upsample_initial_channel=hifi_upsample_initial_channel,
-            hifi_resblock_kernel_sizes=hifi_resblock_kernel_sizes,
-            hifi_resblock_dilation_sizes=hifi_resblock_dilation_sizes,
-            hifi_input_channels=hifi_input_channels,
-            hifi_conv_pre_kernel_size=hifi_conv_pre_kernel_size,
-
-            upsample_init_channels=upsample_init_channels,
-            upsample_block_rates=upsample_block_rates,
-            upsample_block_kernel_sizes=upsample_block_kernel_sizes,
-
-            residual_channels=residual_channels,
-            bsft_channels=bsft_channels,
-            nwstack1_blocks=nwstack1_blocks,
-            nwstack2_blocks=nwstack2_blocks,
-
-            use_spectralunet=use_spectralunet,
-            spectralunet_block_widths=spectralunet_block_widths,
-            spectralunet_block_depth=spectralunet_block_depth,
-            spectralunet_positional_encoding=spectralunet_positional_encoding,
-            kernel_sizes_mrf=None,
-            dilations_mrf=None,
-
-            use_waveunet=use_waveunet,
-            waveunet_block_widths=waveunet_block_widths,
-            waveunet_block_depth=waveunet_block_depth,
-
-
-            norm_type=norm_type,
-            use_skip_connect=use_skip_connect,
-        )
+        self.make_conv_post(waveunet_channels)
 
         self.waveunet_input = waveunet_input
 
@@ -373,23 +215,23 @@ class A2AHiFiPlusGenerator(HiFiPlusGenerator):
         if self.waveunet_input == "waveform":
             self.waveunet_conv_pre = weight_norm(
                 nn.Conv1d(
-                    1, self.hifi.out_channels, 1
+                    1, self.waveunet_channels, 1
                 )
             )
         elif self.waveunet_input == "both":
             self.waveunet_conv_pre = weight_norm(
                 nn.Conv1d(
-                    2, self.hifi.out_channels, 1
+                    2, self.waveunet_channels, 1
                 )
             )
 
 
-
-        self.dim = 513
-        self.num_layers = 8
-        self.adanorm_num_embeddings = None
-        self.intermediate_dim = 1536
-        layer_scale_init_value = 1 / self.num_layers
+        self.dim = convnext_dim
+        self.num_layers_real = num_layers_convnext_real
+        self.num_layers_imag = num_layers_convnext_imag
+        self.adanorm_num_embeddings = adanorm_num_embeddings
+        self.intermediate_dim = intermediate_dim_convnext
+        layer_scale_init_value = 1 / self.num_layers_real
         self.convnext = nn.ModuleList(
             [
                 ConvNeXtBlock(
@@ -398,7 +240,7 @@ class A2AHiFiPlusGenerator(HiFiPlusGenerator):
                     layer_scale_init_value=layer_scale_init_value,
                     adanorm_num_embeddings=self.adanorm_num_embeddings,
                 )
-                for _ in range(self.num_layers)
+                for _ in range(self.num_layers_real)
             ]
         )
         self.convnext2 = nn.ModuleList(
@@ -409,7 +251,7 @@ class A2AHiFiPlusGenerator(HiFiPlusGenerator):
                     layer_scale_init_value=layer_scale_init_value,
                     adanorm_num_embeddings=self.adanorm_num_embeddings,
                 )
-                for _ in range(1)
+                for _ in range(self.num_layers_imag)
             ]
         )
         self.final_layer_norm = nn.LayerNorm(self.dim, eps=1e-6)
@@ -421,6 +263,24 @@ class A2AHiFiPlusGenerator(HiFiPlusGenerator):
         if isinstance(m, (nn.Conv1d, nn.Linear)):
             nn.init.trunc_normal_(m.weight, std=0.02)
             nn.init.constant_(m.bias, 0)
+
+    def make_waveunet_skip_connect(self, ch):
+        self.waveunet_skip_connect = self.norm(nn.Conv1d(ch, ch, 1, 1))
+        self.waveunet_skip_connect.weight.data = torch.eye(ch, ch).unsqueeze(-1)
+        self.waveunet_skip_connect.bias.data.fill_(0.0)
+
+
+    def make_conv_post(self, ch):
+        self.conv_post = self.norm(nn.Conv1d(ch, 1, 7, 1, padding=3))
+        self.conv_post.apply(upsampling_utils.init_weights)
+
+
+    def apply_waveunet(self, x):
+        x_a = x
+        x = self.waveunet(x_a)
+        if self.use_skip_connect:
+            x += self.waveunet_skip_connect(x_a)
+        return x
     
     
 

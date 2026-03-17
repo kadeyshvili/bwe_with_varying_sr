@@ -220,6 +220,7 @@ class BaseTrainer:
         for batch_idx, batch in enumerate(
             tqdm(self.train_dataloader, desc="train", total=self.epoch_len)
         ):
+            batch['epoch'] = epoch
             try:
                 batch = self.process_batch(
                     batch,

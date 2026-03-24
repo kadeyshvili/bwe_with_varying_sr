@@ -42,9 +42,20 @@ class Trainer(BaseTrainer):
 
         wav_fake = self.model.generator(initial_wav, **batch)
 
+        complex_spec_fake = self.model.generator.get_stft(wav_fake, sampling_rate=target_sr)
+        real_fake = complex_spec_fake.real
+        imag_fake = complex_spec_fake.imag
+
+        log_amplitude_fake = torch.log(complex_spec_fake.abs() + 1e-5)
+        phase_fake = complex_spec_fake.angle()
+
         if target_wav.shape != wav_fake.shape:
             wav_fake = torch.stack([F.pad(wav, (0, target_wav.shape[2] - wav_fake.shape[2]), value=0) for wav in wav_fake])
         batch["generated_wav"] = wav_fake
+        batch["real_fake"] = real_fake
+        batch["imag_fake"] = imag_fake
+        batch["log_amplitude_fake"] = log_amplitude_fake
+        batch["phase_fake"] = phase_fake
         
         mel_spec_creator = MelSpectrogram(sr=target_sr).to(self.device)
         mel_spec_fake = mel_spec_creator(wav_fake).squeeze(1)
@@ -94,21 +105,33 @@ class Trainer(BaseTrainer):
         target_mel_spec_creator = MelSpectrogram(sr=target_sr).to(self.device)
         target_melspec = target_mel_spec_creator(target_wav.squeeze(1))
         batch['mel_spec_hr'] = target_melspec
+
+
+        complex_spec = self.model.generator.get_stft(target_wav, sampling_rate=target_sr)
+        real_gt = complex_spec.real
+        imag_gt = complex_spec.imag
+        log_amplitude_gt = torch.log(complex_spec.abs() + 1e-5)
+        phase_gt = complex_spec.angle()
+        batch['real_gt'] = real_gt
+        batch['imag_gt'] = imag_gt
+        batch['log_amplitude_gt'] = log_amplitude_gt
+        batch['phase_gt'] = phase_gt
+        batch['frames'] = phase_gt.shape[-1]
         
         if (initial_sr==4000 and target_sr==8000) or (initial_sr==8000 and target_sr==24000):
             mpd_gen_loss, msd_gen_loss,\
                 mpd_feats_gen_loss, msd_feats_gen_loss,\
-                mel_spec_loss, gen_loss =\
+                mel_spec_loss, loss_stft, phase_loss, amplitude_loss, gen_loss =\
                     self.criterion.generator_loss_2(batch)
         elif (initial_sr==4000 and target_sr==16000) or (initial_sr==8000 and target_sr==48000):
             mpd_gen_loss, msd_gen_loss,\
                 mpd_feats_gen_loss, msd_feats_gen_loss,\
-                mel_spec_loss, gen_loss =\
+                mel_spec_loss, loss_stft, phase_loss, amplitude_loss, gen_loss =\
                     self.criterion.generator_loss(batch)
         else:
             mpd_gen_loss, msd_gen_loss,\
                 mpd_feats_gen_loss, msd_feats_gen_loss,\
-                mel_spec_loss, gen_loss =\
+                mel_spec_loss, loss_stft, phase_loss, amplitude_loss, gen_loss =\
                     self.criterion.generator_loss_3(batch)
 
         if torch.cuda.is_available():
@@ -128,7 +151,9 @@ class Trainer(BaseTrainer):
         batch[f"mpd_feats_gen_loss_{regime_key}"] = mpd_feats_gen_loss
         batch[f"msd_feats_gen_loss_{regime_key}"] = msd_feats_gen_loss
         batch[f"gen_loss_{regime_key}"] = gen_loss
-        
+        batch[f"phase_loss_{regime_key}"] = phase_loss
+        batch[f"amplitude_loss_{regime_key}"] = amplitude_loss
+        batch[f"loss_stft_{regime_key}"] = loss_stft
 
         for loss_name in self.config.writer.loss_names:
             if loss_name in batch.keys():

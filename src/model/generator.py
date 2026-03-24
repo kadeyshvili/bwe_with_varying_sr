@@ -376,20 +376,6 @@ class A2AHiFiPlusGenerator(torch.nn.Module):
 
 
         complex_spec = self.get_stft(x_res, sampling_rate=target_sr)
-        phase = torch.angle(complex_spec)  # (B, F, T) — фаза перед вокодером
-        epoch = batch.get('epoch', -1)
-        if epoch >= 0 and epoch != getattr(self, '_last_phase_log_epoch', -1):
-            self._last_phase_log_epoch = epoch
-            import matplotlib.pyplot as plt
-            phase_dir = "phases"
-            os.makedirs(phase_dir, exist_ok=True)
-            plt.figure(figsize=(20, 5))
-            plt.pcolormesh(phase[0].detach().cpu().numpy())
-            plt.colorbar()
-            plt.title(f"Phase before vocoder (epoch {epoch})")
-            plt.savefig(os.path.join(phase_dir, f"phase_epoch_{epoch}.png"))
-            plt.close()
-
         real = complex_spec.real   # (B, F, T)
         imag = complex_spec.imag   # (B, F, T)
 

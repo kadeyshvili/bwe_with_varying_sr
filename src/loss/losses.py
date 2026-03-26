@@ -168,12 +168,35 @@ class HiFiGANLoss(nn.Module):
         msd_feats_gen_loss = self.fm_loss_ratio_2(batch["msd_gt_feats"], batch["msd_fake_feats"])
 
 
-        loss_real_part = F.l1_loss(batch['real_gt'], batch['real_fake'])
-        loss_imag_part = F.l1_loss(batch['imag_gt'], batch['imag_fake'])
-        stft_consistency_loss = self.stft_consistency_loss_ratio_2(batch["real_fake"], batch["imag_fake"], batch["real_gt"], batch["imag_gt"])
+        real_gt = batch['real_gt']
+        imag_gt = batch['imag_gt']
+        real_fake = batch['real_fake']
+        imag_fake = batch['imag_fake']
+        real_gt = real_gt[..., :min(real_gt.shape[-1], real_fake.shape[-1])]
+        real_fake = real_fake[..., :min(real_gt.shape[-1], real_fake.shape[-1])]
+
+        imag_gt = imag_gt[..., :min(imag_gt.shape[-1], imag_fake.shape[-1])]
+        imag_fake = imag_fake[..., :min(imag_gt.shape[-1], imag_fake.shape[-1])]
+
+        phase_gt = batch['phase_gt']
+        phase_fake = batch['phase_fake']
+
+        phase_fake = phase_fake[..., :min(phase_fake.shape[-1], phase_gt.shape[-1])]
+        phase_gt = phase_gt[..., :min(phase_fake.shape[-1], phase_gt.shape[-1])]
+
+        log_amplitude_gt = batch['log_amplitude_gt']
+        log_amplitude_fake = batch['log_amplitude_fake']
+
+        log_amplitude_gt = log_amplitude_gt[..., :min(log_amplitude_gt.shape[-1], log_amplitude_fake.shape[-1])]
+        log_amplitude_fake = log_amplitude_fake[..., :min(log_amplitude_gt.shape[-1], log_amplitude_fake.shape[-1])]
+
+
+        loss_real_part = F.l1_loss(real_gt, real_fake)
+        loss_imag_part = F.l1_loss(imag_gt, imag_fake)
+        stft_consistency_loss = self.stft_consistency_loss_ratio_2(real_fake, imag_fake, real_gt, imag_gt)
         loss_stft = stft_consistency_loss + 2.25 * (loss_real_part + loss_imag_part)
-        phase_loss = self.phase_loss_ratio_2(batch["phase_gt"], batch["phase_fake"], 1024, batch["frames"])
-        amplitude_loss = self.amplitude_loss_ratio_2(batch["log_amplitude_gt"], batch["log_amplitude_fake"])
+        phase_loss = self.phase_loss_ratio_2(phase_gt, phase_fake, 1024, batch["frames"])
+        amplitude_loss = self.amplitude_loss_ratio_2(log_amplitude_gt, log_amplitude_fake)
         
         return mpd_gen_loss, msd_gen_loss, mpd_feats_gen_loss,\
                 msd_feats_gen_loss, mel_spec_loss, loss_stft,phase_loss,amplitude_loss,\
@@ -189,12 +212,36 @@ class HiFiGANLoss(nn.Module):
         mpd_feats_gen_loss = self.fm_loss_ratio_3(batch["mpd_gt_feats"], batch["mpd_fake_feats"])
         msd_feats_gen_loss = self.fm_loss_ratio_3(batch["msd_gt_feats"], batch["msd_fake_feats"])
 
-        loss_real_part = F.l1_loss(batch['real_gt'], batch['real_fake'])
-        loss_imag_part = F.l1_loss(batch['imag_gt'], batch['imag_fake'])
-        stft_consistency_loss = self.stft_consistency_loss_ratio(batch["real_fake"], batch["imag_fake"], batch["real_gt"], batch["imag_gt"])
+
+        real_gt = batch['real_gt']
+        imag_gt = batch['imag_gt']
+        real_fake = batch['real_fake']
+        imag_fake = batch['imag_fake']
+
+        real_gt = real_gt[..., :min(real_gt.shape[-1], real_fake.shape[-1])]
+        real_fake = real_fake[..., :min(real_gt.shape[-1], real_fake.shape[-1])]
+
+        imag_gt = imag_gt[..., :min(imag_gt.shape[-1], imag_fake.shape[-1])]
+        imag_fake = imag_fake[..., :min(imag_gt.shape[-1], imag_fake.shape[-1])]
+
+        phase_gt = batch['phase_gt']
+        phase_fake = batch['phase_fake']
+
+        phase_fake = phase_fake[..., :min(phase_fake.shape[-1], phase_gt.shape[-1])]
+        phase_gt = phase_gt[..., :min(phase_fake.shape[-1], phase_gt.shape[-1])]
+
+        log_amplitude_gt = batch['log_amplitude_gt']
+        log_amplitude_fake = batch['log_amplitude_fake']
+
+        log_amplitude_gt = log_amplitude_gt[..., :min(log_amplitude_gt.shape[-1], log_amplitude_fake.shape[-1])]
+        log_amplitude_fake = log_amplitude_fake[..., :min(log_amplitude_gt.shape[-1], log_amplitude_fake.shape[-1])]
+
+        loss_real_part = F.l1_loss(real_gt, real_fake)
+        loss_imag_part = F.l1_loss(imag_gt, imag_fake)
+        stft_consistency_loss = self.stft_consistency_loss_ratio(real_fake, imag_fake, real_gt, imag_gt)
         loss_stft = stft_consistency_loss + 2.25 * (loss_real_part + loss_imag_part)
-        phase_loss = self.phase_loss_ratio_3(batch["phase_gt"], batch["phase_fake"], 1024, batch["frames"])
-        amplitude_loss = self.amplitude_loss_ratio_3(batch["log_amplitude_gt"], batch["log_amplitude_fake"])
+        phase_loss = self.phase_loss_ratio_3(phase_gt, phase_fake, 1024, batch["frames"])
+        amplitude_loss = self.amplitude_loss_ratio_3(log_amplitude_gt, log_amplitude_fake)
         
         
         return mpd_gen_loss, msd_gen_loss, mpd_feats_gen_loss,\
@@ -210,12 +257,38 @@ class HiFiGANLoss(nn.Module):
         mpd_feats_gen_loss = self.fm_loss(batch["mpd_gt_feats"], batch["mpd_fake_feats"])
         msd_feats_gen_loss = self.fm_loss(batch["msd_gt_feats"], batch["msd_fake_feats"])
 
-        loss_real_part = F.l1_loss(batch['real_gt'], batch['real_fake'])
-        loss_imag_part = F.l1_loss(batch['imag_gt'], batch['imag_fake'])
-        stft_consistency_loss = self.stft_consistency_loss_ratio(batch["real_fake"], batch["imag_fake"], batch["real_gt"], batch["imag_gt"])
+
+        real_gt = batch['real_gt']
+        imag_gt = batch['imag_gt']
+        real_fake = batch['real_fake']
+        imag_fake = batch['imag_fake']
+
+        real_gt = real_gt[..., :min(real_gt.shape[-1], real_fake.shape[-1])]
+        real_fake = real_fake[..., :min(real_gt.shape[-1], real_fake.shape[-1])]
+
+        imag_gt = imag_gt[..., :min(imag_gt.shape[-1], imag_fake.shape[-1])]
+        imag_fake = imag_fake[..., :min(imag_gt.shape[-1], imag_fake.shape[-1])]
+
+        phase_gt = batch['phase_gt']
+        phase_fake = batch['phase_fake']
+
+        phase_fake = phase_fake[..., :min(phase_fake.shape[-1], phase_gt.shape[-1])]
+        phase_gt = phase_gt[..., :min(phase_fake.shape[-1], phase_gt.shape[-1])]
+
+        log_amplitude_gt = batch['log_amplitude_gt']
+        log_amplitude_fake = batch['log_amplitude_fake']
+
+        log_amplitude_gt = log_amplitude_gt[..., :min(log_amplitude_gt.shape[-1], log_amplitude_fake.shape[-1])]
+        log_amplitude_fake = log_amplitude_fake[..., :min(log_amplitude_gt.shape[-1], log_amplitude_fake.shape[-1])]
+
+
+
+        loss_real_part = F.l1_loss(real_gt, real_fake)
+        loss_imag_part = F.l1_loss(imag_gt, imag_fake)
+        stft_consistency_loss = self.stft_consistency_loss_ratio(real_fake, imag_fake, real_gt, imag_gt)
         loss_stft = stft_consistency_loss + 2.25 * (loss_real_part + loss_imag_part)
-        phase_loss = self.phase_loss_ratio(batch["phase_gt"], batch["phase_fake"], 1024, batch["frames"])
-        amplitude_loss = self.amplitude_loss_ratio(batch["log_amplitude_gt"], batch["log_amplitude_fake"])
+        phase_loss = self.phase_loss_ratio(phase_gt, phase_fake, 1024, batch["frames"])
+        amplitude_loss = self.amplitude_loss_ratio(log_amplitude_gt, log_amplitude_fake)
         
 
         return mpd_gen_loss, msd_gen_loss, mpd_feats_gen_loss,\

@@ -4,8 +4,7 @@ from src.metrics.tracker import MetricTracker
 from src.trainer.base_trainer import BaseTrainer
 import torch.nn.functional as F
 from src.model.melspec import MelSpectrogram
-from src.utils.sr_utils import get_sr_ratio, get_regime_key
-from hydra.utils import instantiate
+from src.utils.sr_utils import  get_regime_key
 
 
 
@@ -175,61 +174,56 @@ class Trainer(BaseTrainer):
         # method to log data from you batch
         # such as audio, text or images, for example
 
-        # logging scheme might be different for different partitions
-        if mode == "train":  # the method is called only every self.log_step steps
-            for regime_key in self.samples_for_logging.keys():
-                samples = self.samples_for_logging.get(regime_key, [])
+        # Use fixed samples so the same inputs are logged every epoch
+        if mode == "train":
+            for regime_key, samples in self.fixed_samples_for_logging.items():
+                if regime_key.startswith("val_fixed_"):
+                    continue
                 for idx, sample in enumerate(samples[:5]):
                     self.log_spectrogram(partition='train', idx=idx, **sample)
                     self.log_audio(partition='train', idx=idx, **sample)
-            self.samples_for_logging = {key: [] for key in self.samples_for_logging.keys()}
         else:
-            for regime_key in self.samples_for_logging.keys():
-                samples = self.samples_for_logging.get(regime_key, [])
+            val_prefix = f"{mode}_fixed_"
+            for fixed_key, samples in self.fixed_samples_for_logging.items():
+                if not fixed_key.startswith(val_prefix):
+                    continue
                 for idx, sample in enumerate(samples[:5]):
-                    self.log_spectrogram(partition='val', idx=idx, **sample)
-                    self.log_audio(partition='val', idx=idx, **sample)
-            self.samples_for_logging = {key: [] for key in self.samples_for_logging.keys()}
+                    self.log_spectrogram(partition=mode, idx=idx, **sample)
+                    self.log_audio(partition=mode, idx=idx, **sample)
 
 
     def log_audio(self, wav_lr, wav_hr,  generated_wav, partition, idx, **batch):
         initial_len_lr = batch['initial_len_lr']
         initial_len_hr = batch['initial_len_hr']
-        for i in range(len(initial_len_lr)):
+        initial_sr = batch['initial_sr']
+        target_sr = batch['target_sr']
 
-            init_len_lr = initial_len_lr[i]
-            init_len_hr = initial_len_hr[i]
-            
-            initial_sr = batch['initial_sr']
-            target_sr = batch['target_sr']
-            regime = batch.get('regime', None)
-            
-            self.writer.add_audio(f"initial_wav_lr_{initial_sr}_{target_sr}_{i}", wav_lr[i][:, :init_len_lr], initial_sr)
-            self.writer.add_audio(f"initial_wav_hr_{initial_sr}_{target_sr}_{i}", wav_hr[i][:, :init_len_hr], target_sr)
-            self.writer.add_audio(f"generated_wav_{initial_sr}_{target_sr}_{i}", generated_wav[i][:, :init_len_hr], target_sr)
+        # Log only the first element of the batch to keep a fixed set of samples per epoch
+        init_len_lr = initial_len_lr[0]
+        init_len_hr = initial_len_hr[0]
+        self.writer.add_audio(f"initial_wav_lr_{initial_sr}_{target_sr}_sample{idx}", wav_lr[0][:, :init_len_lr], initial_sr)
+        self.writer.add_audio(f"initial_wav_hr_{initial_sr}_{target_sr}_sample{idx}", wav_hr[0][:, :init_len_hr], target_sr)
+        self.writer.add_audio(f"generated_wav_{initial_sr}_{target_sr}_sample{idx}", generated_wav[0][:, :init_len_hr], target_sr)
 
 
     def log_spectrogram(self, melspec_lr, melspec_hr,  mel_spec_fake, partition, idx, **batch):
         initial_sr = batch['initial_sr']
         target_sr = batch['target_sr']
-        regime = batch.get('regime', None)
 
-        
         initial_len_melspec_lr = batch['initial_len_melspec_lr']
         initial_len_melspec_hr = batch['initial_len_melspec_hr']
-        for i in range(len(initial_len_melspec_lr)):
 
-            
-            len_melspec_lr =  initial_len_melspec_lr[i]
-            len_melspec_hr = initial_len_melspec_hr[i]
+        # Log only the first element of the batch to keep a fixed set of samples per epoch
+        len_melspec_lr = initial_len_melspec_lr[0]
+        len_melspec_hr = initial_len_melspec_hr[0]
 
-            spectrogram_for_plot_real_lr = melspec_lr[i].detach().cpu()[:, :len_melspec_lr]
-            spectrogram_for_plot_real_hr = melspec_hr[i].detach().cpu()[:, :len_melspec_hr]
-            spectrogram_for_plot_fake = mel_spec_fake[i].detach().cpu()
-            
-            image = plot_spectrogram(spectrogram_for_plot_real_lr)
-            self.writer.add_image(f"melspectrogram_real_lr_{initial_sr}_{target_sr}_{i}", image)
-            image_hr = plot_spectrogram(spectrogram_for_plot_real_hr)
-            self.writer.add_image(f"melspectrogram_real_hr_{initial_sr}_{target_sr}_{i}", image_hr)
-            image_fake = plot_spectrogram(spectrogram_for_plot_fake)
-            self.writer.add_image(f"melspectrogram_fake_{initial_sr}_{target_sr}_{i}", image_fake)
+        spectrogram_for_plot_real_lr = melspec_lr[0].detach().cpu()[:, :len_melspec_lr]
+        spectrogram_for_plot_real_hr = melspec_hr[0].detach().cpu()[:, :len_melspec_hr]
+        spectrogram_for_plot_fake = mel_spec_fake[0].detach().cpu()
+
+        image = plot_spectrogram(spectrogram_for_plot_real_lr)
+        self.writer.add_image(f"melspectrogram_real_lr_{initial_sr}_{target_sr}_sample{idx}", image)
+        image_hr = plot_spectrogram(spectrogram_for_plot_real_hr)
+        self.writer.add_image(f"melspectrogram_real_hr_{initial_sr}_{target_sr}_sample{idx}", image_hr)
+        image_fake = plot_spectrogram(spectrogram_for_plot_fake)
+        self.writer.add_image(f"melspectrogram_fake_{initial_sr}_{target_sr}_sample{idx}", image_fake)

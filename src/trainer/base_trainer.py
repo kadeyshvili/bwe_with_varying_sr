@@ -8,9 +8,8 @@ import itertools
 from src.datasets.data_utils import inf_loop
 from src.metrics.tracker import MetricTracker
 from src.utils.io_utils import ROOT_PATH
-from src.model.melspec import  MelSpectrogram
 from src.metrics.calculate_metrics import calculate_all_metrics
-from src.utils.sr_utils import get_sr_ratio, get_regime_key
+from src.utils.sr_utils import  get_regime_key
 from collections import defaultdict
 import numpy as np
 
@@ -134,6 +133,7 @@ class BaseTrainer:
         )
         
         self.samples_for_logging = defaultdict(list)
+        self.fixed_samples_for_logging = defaultdict(list)  # fixed once, reused every epoch
 
         self.checkpoint_dir = (
             ROOT_PATH / config.trainer.save_dir / config.writer.run_name
@@ -244,8 +244,9 @@ class BaseTrainer:
             if regime_key not in self.samples_for_logging:
                 self.samples_for_logging[regime_key] = []
             
-            if regime_key and len(self.samples_for_logging[regime_key]) < 10:
-                
+            # Fill fixed_samples_for_logging only once (first epoch); on subsequent epochs
+            # only update model outputs so we always compare the same inputs.
+            if regime_key and len(self.fixed_samples_for_logging[regime_key]) < 7:
                 sample = {
                     'wav_lr': batch['wav_lr'].clone(),
                     'wav_hr': batch['wav_hr'].clone(),
@@ -260,7 +261,11 @@ class BaseTrainer:
                     'initial_len_melspec_lr': batch['initial_len_melspec_lr'],
                     'initial_len_melspec_hr': batch['initial_len_melspec_hr'],
                 }
-                self.samples_for_logging[regime_key].append(sample)
+                self.fixed_samples_for_logging[regime_key].append(sample)
+            else:
+                idx = batch_idx % len(self.fixed_samples_for_logging[regime_key])
+                self.fixed_samples_for_logging[regime_key][idx]['generated_wav'] = batch['generated_wav'].clone()
+                self.fixed_samples_for_logging[regime_key][idx]['mel_spec_fake'] = batch['mel_spec_fake'].clone()
 
             if batch_idx % self.log_step == 0:
                 self.writer.set_step((epoch - 1) * self.epoch_len + batch_idx)
@@ -311,9 +316,6 @@ class BaseTrainer:
         self.evaluation_metrics.reset()
         self.writer.mode = part
         
-        # Reset samples collection for validation
-        self.samples_for_logging = defaultdict(list)
-        
         # Reset metrics state before evaluation to avoid accumulation from previous epochs
         all_regime_keys = set()
         for metric in self.metrics['inference']:
@@ -325,6 +327,8 @@ class BaseTrainer:
                     metric.results[mode] = defaultdict(list)
         
         metrics_by_regime = {}
+        # Track which fixed val slots still need to be filled
+        val_fixed_key = f"{part}_fixed"
         
         with torch.no_grad():
             for batch_idx, batch in tqdm(
@@ -342,18 +346,13 @@ class BaseTrainer:
                 initial_sr = batch['initial_sr']
                 target_sr = batch['target_sr']
                 
-                # Collect samples from all regimes for logging
                 regime_key = get_regime_key(initial_sr, target_sr)
+                fixed_key = f"{val_fixed_key}_{regime_key}"
                 
-                if regime_key not in self.samples_for_logging:
-                    self.samples_for_logging[regime_key] = []
-                
-                if len(self.samples_for_logging[regime_key]) < 5:
-                    initial_len_lr = batch['initial_len_lr']
-                    initial_len_hr = batch['initial_len_hr']
-                    initial_len_melspec_lr = batch['initial_len_melspec_lr']
-                    initial_len_melspec_hr = batch['initial_len_melspec_hr']
-                    
+                # Fill fixed val samples only once (first epoch); on subsequent epochs
+                # only update the model outputs (generated_wav, mel_spec_fake) so we
+                # always compare the same inputs across epochs.
+                if len(self.fixed_samples_for_logging[fixed_key]) < 5:
                     sample = {
                         'wav_lr': batch['wav_lr'].clone(),
                         'wav_hr': batch['wav_hr'].clone(),
@@ -364,12 +363,17 @@ class BaseTrainer:
                         'initial_sr': initial_sr,
                         'target_sr': target_sr,
                         'regime': regime_key,
-                        'initial_len_lr': initial_len_lr,
-                        'initial_len_hr': initial_len_hr,
-                        'initial_len_melspec_lr': initial_len_melspec_lr,
-                        'initial_len_melspec_hr': initial_len_melspec_hr,
+                        'initial_len_lr': batch['initial_len_lr'],
+                        'initial_len_hr': batch['initial_len_hr'],
+                        'initial_len_melspec_lr': batch['initial_len_melspec_lr'],
+                        'initial_len_melspec_hr': batch['initial_len_melspec_hr'],
                     }
-                    self.samples_for_logging[regime_key].append(sample)
+                    self.fixed_samples_for_logging[fixed_key].append(sample)
+                else:
+                    # Update only model outputs for already-fixed samples
+                    idx = batch_idx % len(self.fixed_samples_for_logging[fixed_key])
+                    self.fixed_samples_for_logging[fixed_key][idx]['generated_wav'] = batch['generated_wav'].clone()
+                    self.fixed_samples_for_logging[fixed_key][idx]['mel_spec_fake'] = batch['mel_spec_fake'].clone()
                 
                 metrics_to_use = [metric for metric in self.metrics['inference'] if metric.name.endswith(regime_key)]
                 batch_metrics = calculate_all_metrics(
@@ -398,7 +402,6 @@ class BaseTrainer:
                         metric.results[mode_key] = defaultdict(list)
                     
             self.writer.set_step(epoch * self.epoch_len, part)
-            # Log all collected samples from all regimes
             self._log_batch(batch_idx, batch, part)
         
         for regime_key, metrics_dict in metrics_by_regime.items():

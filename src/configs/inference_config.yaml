@@ -1,6 +1,6 @@
 defaults:
   - model: model
-  - metrics: test_metrics_4_16
+  - metrics: metrics_8_24
   - datasets: test_dataset
   - dataloader: test_loader
   - _self_

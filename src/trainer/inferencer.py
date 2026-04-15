@@ -4,7 +4,7 @@ from tqdm.auto import tqdm
 from src.metrics.tracker import MetricTracker
 from src.trainer.base_trainer import BaseTrainer
 import numpy as np
-import torchaudio
+import soundfile as sf
 from pathlib import Path
 from src.metrics.calculate_metrics import calculate_all_metrics
 import torch.nn.functional as F
@@ -138,13 +138,21 @@ class Inferencer(BaseTrainer):
 
 
         batch_size = batch["generated_wav"].shape[0]
+        initial_lens_hr = batch["initial_len_hr"]
+        sr_save = int(target_sr) if not isinstance(target_sr, torch.Tensor) else int(target_sr.item())
 
         for i in range(batch_size):
             generated_wavs = batch["generated_wav"][i].detach().clone()
+            gen_len = int(initial_lens_hr[i].item()) if torch.is_tensor(initial_lens_hr) else int(initial_lens_hr[i])
+            generated_wavs = generated_wavs[:, :gen_len]
             path_to_save =  batch["paths_hr"][i]
 
             if self.save_path is not None:
-                torchaudio.save(str(self.save_path / part / f"{str(Path(path_to_save).stem)}.wav"), generated_wavs.detach().to(torch.device('cpu')), sample_rate=target_sr)
+                out_path = self.save_path / part / f"{Path(path_to_save).stem}.wav"
+                wav = generated_wavs.detach().float().cpu().numpy()
+                if wav.ndim == 2:
+                    wav = wav.T
+                sf.write(str(out_path), wav, sr_save, subtype="FLOAT")
               
         return batch
 

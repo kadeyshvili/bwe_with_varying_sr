@@ -111,6 +111,44 @@ class SpectrogramLoss(nn.Module):
 
     def forward(self, initial_spec, pred_spec):
         return F.l1_loss(pred_spec, initial_spec)
+
+
+class SISDRLoss(nn.Module):
+    def __init__(self, eps=1e-8, reduction="mean", zero_mean=True):
+        super().__init__()
+        self.eps = eps
+        self.reduction = reduction
+        self.zero_mean = zero_mean
+
+    def forward(self, target, estimate):
+
+        min_len = min(target.shape[-1], estimate.shape[-1])
+        target = target[..., :min_len]
+        estimate = estimate[..., :min_len]
+
+        if self.zero_mean:
+            target = target - target.mean(dim=-1, keepdim=True)
+            estimate = estimate - estimate.mean(dim=-1, keepdim=True)
+
+        # Projection of estimated signal onto target.
+        target_energy = torch.sum(target ** 2, dim=-1, keepdim=True) + self.eps
+        scale = torch.sum(estimate * target, dim=-1, keepdim=True) / target_energy
+        projected = scale * target
+        noise = estimate - projected
+
+        si_sdr = 10 * torch.log10(
+            (torch.sum(projected ** 2, dim=-1) + self.eps)
+            / (torch.sum(noise ** 2, dim=-1) + self.eps)
+        )
+        loss = -si_sdr
+
+        if self.reduction == "mean":
+            return loss.mean()
+        if self.reduction == "sum":
+            return loss.sum()
+        if self.reduction == "none":
+            return loss
+        raise ValueError(f"Unsupported reduction: {self.reduction}")
     
 class HiFiGANLoss(nn.Module):
     def __init__(self):
@@ -123,6 +161,7 @@ class HiFiGANLoss(nn.Module):
         self.stft_consistency_loss_ratio_2 = STFT_consistency_loss()
         self.amplitude_loss_ratio_2 = Amplitude_loss()
         self.phase_loss_ratio_2 = Phase_loss()
+        self.sisdr_loss_ratio_2 = SISDRLoss()
         
 
         # Loss modules for ratio the second part
@@ -133,6 +172,7 @@ class HiFiGANLoss(nn.Module):
         self.stft_consistency_loss_ratio_3 = STFT_consistency_loss()
         self.amplitude_loss_ratio_3 = Amplitude_loss()
         self.phase_loss_ratio_3 = Phase_loss()
+        self.sisdr_loss_ratio_3 = SISDRLoss()
         # Loss modules for full part
         self.disc_loss = DiscriminatorLoss()
         self.gen_loss = GeneratorLoss()
@@ -141,7 +181,7 @@ class HiFiGANLoss(nn.Module):
         self.stft_consistency_loss_ratio = STFT_consistency_loss()
         self.amplitude_loss_ratio = Amplitude_loss()
         self.phase_loss_ratio = Phase_loss()
-
+        self.sisdr_loss_ratio = SISDRLoss()
         
     def discriminator_loss_2(self, batch):
         mpd_disc_loss = self.disc_loss_ratio_2(batch["mpd_gt_out"], batch["mpd_fake_out"])
@@ -197,10 +237,11 @@ class HiFiGANLoss(nn.Module):
         loss_stft = stft_consistency_loss + 2.25 * (loss_real_part + loss_imag_part)
         phase_loss = self.phase_loss_ratio_2(phase_gt, phase_fake, 1024, batch["frames"])
         amplitude_loss = self.amplitude_loss_ratio_2(log_amplitude_gt, log_amplitude_fake)
+        sisdr_loss = self.sisdr_loss_ratio_2(batch["wav_hr"], batch["generated_wav"])
         
         return mpd_gen_loss, msd_gen_loss, mpd_feats_gen_loss,\
-                msd_feats_gen_loss, mel_spec_loss, loss_stft,phase_loss,amplitude_loss,\
-                20*loss_stft + mpd_gen_loss + msd_gen_loss + 45*mel_spec_loss + 2*mpd_feats_gen_loss + 2*msd_feats_gen_loss + 100*phase_loss + 45*amplitude_loss
+                msd_feats_gen_loss, mel_spec_loss, loss_stft,phase_loss,amplitude_loss, sisdr_loss,\
+                20*loss_stft + mpd_gen_loss + msd_gen_loss + 45*mel_spec_loss + 2*mpd_feats_gen_loss + 2*msd_feats_gen_loss + 100*phase_loss + 45*amplitude_loss + 45*sisdr_loss
     
 
     def generator_loss_3(self, batch):
@@ -242,11 +283,12 @@ class HiFiGANLoss(nn.Module):
         loss_stft = stft_consistency_loss + 2.25 * (loss_real_part + loss_imag_part)
         phase_loss = self.phase_loss_ratio_3(phase_gt, phase_fake, 1024, batch["frames"])
         amplitude_loss = self.amplitude_loss_ratio_3(log_amplitude_gt, log_amplitude_fake)
+        sisdr_loss = self.sisdr_loss_ratio_3(batch["wav_hr"], batch["generated_wav"])
         
         
         return mpd_gen_loss, msd_gen_loss, mpd_feats_gen_loss,\
-                msd_feats_gen_loss, mel_spec_loss, loss_stft,phase_loss,amplitude_loss,\
-                20*loss_stft + mpd_gen_loss + msd_gen_loss + 45*mel_spec_loss + 2*mpd_feats_gen_loss + 2*msd_feats_gen_loss + 100*phase_loss + 45*amplitude_loss
+                msd_feats_gen_loss, mel_spec_loss, loss_stft,phase_loss,amplitude_loss, sisdr_loss,\
+                20*loss_stft + mpd_gen_loss + msd_gen_loss + 45*mel_spec_loss + 2*mpd_feats_gen_loss + 2*msd_feats_gen_loss + 100*phase_loss + 45*amplitude_loss + 45*sisdr_loss
 
     def generator_loss(self, batch):
         mpd_gen_loss = self.gen_loss(batch["mpd_fake_out"])
@@ -289,11 +331,12 @@ class HiFiGANLoss(nn.Module):
         loss_stft = stft_consistency_loss + 2.25 * (loss_real_part + loss_imag_part)
         phase_loss = self.phase_loss_ratio(phase_gt, phase_fake, 1024, batch["frames"])
         amplitude_loss = self.amplitude_loss_ratio(log_amplitude_gt, log_amplitude_fake)
+        sisdr_loss = self.sisdr_loss_ratio(batch["wav_hr"], batch["generated_wav"])
         
 
         return mpd_gen_loss, msd_gen_loss, mpd_feats_gen_loss,\
-                msd_feats_gen_loss, mel_spec_loss, loss_stft,phase_loss,amplitude_loss,\
-                20*loss_stft + mpd_gen_loss + msd_gen_loss + 45*mel_spec_loss + 2*mpd_feats_gen_loss + 2*msd_feats_gen_loss + 100*phase_loss + 45*amplitude_loss
+                msd_feats_gen_loss, mel_spec_loss, loss_stft,phase_loss,amplitude_loss, sisdr_loss,\
+                20*loss_stft + mpd_gen_loss + msd_gen_loss + 45*mel_spec_loss + 2*mpd_feats_gen_loss + 2*msd_feats_gen_loss + 100*phase_loss + 45*amplitude_loss + 45*sisdr_loss
         
         
         

@@ -161,7 +161,7 @@ class A2AHiFiPlusGenerator(torch.nn.Module):
         use_waveunet=True,
         waveunet_block_widths=(10, 20, 40, 80),
         waveunet_block_depth=4,
-        waveunet_channels=8,
+        waveunet_channels=2,
 
         convnext_dim = 513,
         num_layers_convnext_real = 8,
@@ -212,19 +212,19 @@ class A2AHiFiPlusGenerator(torch.nn.Module):
 
         self.waveunet_input = waveunet_input
 
-        self.waveunet_conv_pre = None
-        if self.waveunet_input == "waveform":
-            self.waveunet_conv_pre = weight_norm(
-                nn.Conv1d(
-                    1, self.waveunet_channels, 1
-                )
-            )
-        elif self.waveunet_input == "both":
-            self.waveunet_conv_pre = weight_norm(
-                nn.Conv1d(
-                    2, self.waveunet_channels, 1
-                )
-            )
+        # self.waveunet_conv_pre = None
+        # if self.waveunet_input == "waveform":
+        #     self.waveunet_conv_pre = weight_norm(
+        #         nn.Conv1d(
+        #             1, self.waveunet_channels, 1
+        #         )
+        #     )
+        # elif self.waveunet_input == "both":
+        #     self.waveunet_conv_pre = weight_norm(
+        #         nn.Conv1d(
+        #             2, self.waveunet_channels, 1
+        #         )
+        #     )
 
 
         self.dim = convnext_dim
@@ -295,15 +295,7 @@ class A2AHiFiPlusGenerator(torch.nn.Module):
 
     
     def apply_waveunet_a2a(self, x, x_reference):
-        if self.waveunet_input == "waveform":
-            x_a = self.waveunet_conv_pre(x_reference)
-        elif self.waveunet_input == "both":
-            x_a = torch.cat([x, x_reference], 1)
-            x_a = self.waveunet_conv_pre(x_a)
-        elif self.waveunet_input == "hifi":
-            x_a = x
-        else:
-            raise ValueError
+        x_a = torch.cat([x, x_reference], 1)
         x = self.waveunet(x_a)
         if self.use_skip_connect:
             x += self.waveunet_skip_connect(x_a)

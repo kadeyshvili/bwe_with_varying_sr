@@ -9,16 +9,16 @@ generator_config:
   nwstack2_blocks: 1
 
   use_waveunet: True
-  waveunet_block_widths: [10, 20, 40, 80]
-  waveunet_block_depth: 4
+  waveunet_block_widths: [4, 8, 16]
+  waveunet_block_depth: 3
 
   norm_type: "weight"
   use_skip_connect: True
   waveunet_input: "both"
-  waveunet_channels: 8
+  waveunet_channels: 2
 
   convnext_dim: 513
-  num_layers_convnext_real: 8
+  num_layers_convnext_real: 1
   num_layers_convnext_imag: 1
   intermediate_dim_convnext: 1536
 

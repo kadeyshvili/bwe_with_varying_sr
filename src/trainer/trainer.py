@@ -120,17 +120,20 @@ class Trainer(BaseTrainer):
         if (initial_sr==4000 and target_sr==8000) or (initial_sr==8000 and target_sr==24000):
             mpd_gen_loss, msd_gen_loss,\
                 mpd_feats_gen_loss, msd_feats_gen_loss,\
-                mel_spec_loss, loss_stft, phase_loss, amplitude_loss, gen_loss =\
+                mel_spec_loss, loss_stft, phase_loss, amplitude_loss,\
+                wav_l1_loss, mrstft_loss, gen_loss =\
                     self.criterion.generator_loss_2(batch)
         elif (initial_sr==4000 and target_sr==16000) or (initial_sr==8000 and target_sr==48000):
             mpd_gen_loss, msd_gen_loss,\
                 mpd_feats_gen_loss, msd_feats_gen_loss,\
-                mel_spec_loss, loss_stft, phase_loss, amplitude_loss, gen_loss =\
+                mel_spec_loss, loss_stft, phase_loss, amplitude_loss,\
+                wav_l1_loss, mrstft_loss, gen_loss =\
                     self.criterion.generator_loss(batch)
         else:
             mpd_gen_loss, msd_gen_loss,\
                 mpd_feats_gen_loss, msd_feats_gen_loss,\
-                mel_spec_loss, loss_stft, phase_loss, amplitude_loss, gen_loss =\
+                mel_spec_loss, loss_stft, phase_loss, amplitude_loss,\
+                wav_l1_loss, mrstft_loss, gen_loss =\
                     self.criterion.generator_loss_3(batch)
 
         if torch.cuda.is_available():
@@ -153,6 +156,8 @@ class Trainer(BaseTrainer):
         batch[f"phase_loss_{regime_key}"] = phase_loss
         batch[f"amplitude_loss_{regime_key}"] = amplitude_loss
         batch[f"loss_stft_{regime_key}"] = loss_stft
+        batch[f"wav_l1_loss_{regime_key}"] = wav_l1_loss
+        batch[f"mrstft_loss_{regime_key}"] = mrstft_loss
         for loss_name in self.config.writer.loss_names:
             if loss_name in batch.keys():
                 metrics.update(loss_name, batch[loss_name].item())

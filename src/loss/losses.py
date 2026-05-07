@@ -104,13 +104,79 @@ class MelSpectrogramLoss(nn.Module):
 
     def forward(self, initial_spec, pred_spec):
         return F.l1_loss(pred_spec, initial_spec)
-    
+
 class SpectrogramLoss(nn.Module):
     def __init__(self):
         super().__init__()
 
     def forward(self, initial_spec, pred_spec):
         return F.l1_loss(pred_spec, initial_spec)
+
+
+class WaveformL1Loss(nn.Module):
+    def forward(self, wav_fake, wav_hr):
+        L = min(wav_fake.shape[-1], wav_hr.shape[-1])
+        return F.l1_loss(wav_fake[..., :L], wav_hr[..., :L])
+
+
+class STFTMagnitudeLoss(nn.Module):
+    def __init__(self, n_fft, hop_size, win_size):
+        super().__init__()
+        self.n_fft = n_fft
+        self.hop_size = hop_size
+        self.win_size = win_size
+        self.register_buffer("window", torch.hann_window(win_size))
+
+    def magnitude(self, x):
+        if x.dim() == 3:
+            x = x.squeeze(1)
+        spec = torch.stft(
+            x,
+            n_fft=self.n_fft,
+            hop_length=self.hop_size,
+            win_length=self.win_size,
+            window=self.window,
+            center=True,
+            return_complex=True,
+        )
+        return torch.abs(spec)
+
+    def forward(self, wav_fake, wav_hr):
+        mag_fake = self.magnitude(wav_fake)
+        mag_hr = self.magnitude(wav_hr)
+        T = min(mag_fake.shape[-1], mag_hr.shape[-1])
+        mag_fake = mag_fake[..., :T]
+        mag_hr = mag_hr[..., :T]
+        sc = torch.norm(mag_hr - mag_fake, p="fro") / (torch.norm(mag_hr, p="fro") + 1e-7)
+        log_mag = F.l1_loss(torch.log(mag_fake + 1e-7), torch.log(mag_hr + 1e-7))
+        return sc, log_mag
+
+
+class MultiResolutionSTFTLoss(nn.Module):
+    def __init__(
+        self,
+        fft_sizes=(512, 1024, 2048),
+        hop_sizes=(128, 256, 512),
+        win_sizes=(512, 1024, 2048),
+    ):
+        super().__init__()
+        assert len(fft_sizes) == len(hop_sizes) == len(win_sizes)
+        self.losses = nn.ModuleList([
+            STFTMagnitudeLoss(n, h, w) for n, h, w in zip(fft_sizes, hop_sizes, win_sizes)
+        ])
+
+    def forward(self, wav_fake, wav_hr):
+        L = min(wav_fake.shape[-1], wav_hr.shape[-1])
+        wav_fake = wav_fake[..., :L]
+        wav_hr = wav_hr[..., :L]
+        sc_total = 0.0
+        mag_total = 0.0
+        for loss in self.losses:
+            sc, mag = loss(wav_fake, wav_hr)
+            sc_total = sc_total + sc
+            mag_total = mag_total + mag
+        n = len(self.losses)
+        return sc_total / n, mag_total / n
 
   
 class HiFiGANLoss(nn.Module):
@@ -142,6 +208,18 @@ class HiFiGANLoss(nn.Module):
         self.stft_consistency_loss_ratio = STFT_consistency_loss()
         self.amplitude_loss_ratio = Amplitude_loss()
         self.phase_loss_ratio = Phase_loss()
+
+        # Time-domain losses (улучшают SNR)
+        self.wav_l1 = WaveformL1Loss()
+        self.mrstft = MultiResolutionSTFTLoss()
+
+    def _wav_losses(self, batch):
+        wav_fake = batch["generated_wav"]
+        wav_hr = batch["wav_hr"]
+        wav_l1 = self.wav_l1(wav_fake, wav_hr)
+        sc, log_mag = self.mrstft(wav_fake, wav_hr)
+        mrstft = sc + log_mag
+        return wav_l1, mrstft
         
     def discriminator_loss_2(self, batch):
         mpd_disc_loss = self.disc_loss_ratio_2(batch["mpd_gt_out"], batch["mpd_fake_out"])
@@ -197,11 +275,14 @@ class HiFiGANLoss(nn.Module):
         loss_stft = stft_consistency_loss + 2.25 * (loss_real_part + loss_imag_part)
         phase_loss = self.phase_loss_ratio_2(phase_gt, phase_fake, 1024, batch["frames"])
         amplitude_loss = self.amplitude_loss_ratio_2(log_amplitude_gt, log_amplitude_fake)
-        
+
+        wav_l1, mrstft = self._wav_losses(batch)
+
         return mpd_gen_loss, msd_gen_loss, mpd_feats_gen_loss,\
-                msd_feats_gen_loss, mel_spec_loss, loss_stft,phase_loss,amplitude_loss,\
-                20*loss_stft + mpd_gen_loss + msd_gen_loss + 45*mel_spec_loss + 2*mpd_feats_gen_loss + 2*msd_feats_gen_loss + 100*phase_loss + 45*amplitude_loss
-    
+                msd_feats_gen_loss, mel_spec_loss, loss_stft, phase_loss, amplitude_loss,\
+                wav_l1, mrstft,\
+                20*loss_stft + mpd_gen_loss + msd_gen_loss + 45*mel_spec_loss + 2*mpd_feats_gen_loss + 2*msd_feats_gen_loss + 100*phase_loss + 45*amplitude_loss + 45*wav_l1 + 2.5*mrstft
+
 
     def generator_loss_3(self, batch):
         mpd_gen_loss = self.gen_loss_ratio_3(batch["mpd_fake_out"])
@@ -242,10 +323,13 @@ class HiFiGANLoss(nn.Module):
         loss_stft = stft_consistency_loss + 2.25 * (loss_real_part + loss_imag_part)
         phase_loss = self.phase_loss_ratio_3(phase_gt, phase_fake, 1024, batch["frames"])
         amplitude_loss = self.amplitude_loss_ratio_3(log_amplitude_gt, log_amplitude_fake)
-        
+
+        wav_l1, mrstft = self._wav_losses(batch)
+
         return mpd_gen_loss, msd_gen_loss, mpd_feats_gen_loss,\
-                msd_feats_gen_loss, mel_spec_loss, loss_stft,phase_loss,amplitude_loss,\
-                20*loss_stft + mpd_gen_loss + msd_gen_loss + 45*mel_spec_loss + 2*mpd_feats_gen_loss + 2*msd_feats_gen_loss + 100*phase_loss + 45*amplitude_loss
+                msd_feats_gen_loss, mel_spec_loss, loss_stft, phase_loss, amplitude_loss,\
+                wav_l1, mrstft,\
+                20*loss_stft + mpd_gen_loss + msd_gen_loss + 45*mel_spec_loss + 2*mpd_feats_gen_loss + 2*msd_feats_gen_loss + 100*phase_loss + 45*amplitude_loss + 45*wav_l1 + 2.5*mrstft
 
     def generator_loss(self, batch):
         mpd_gen_loss = self.gen_loss(batch["mpd_fake_out"])
@@ -289,9 +373,12 @@ class HiFiGANLoss(nn.Module):
         phase_loss = self.phase_loss_ratio(phase_gt, phase_fake, 1024, batch["frames"])
         amplitude_loss = self.amplitude_loss_ratio(log_amplitude_gt, log_amplitude_fake)
 
+        wav_l1, mrstft = self._wav_losses(batch)
+
         return mpd_gen_loss, msd_gen_loss, mpd_feats_gen_loss,\
-                msd_feats_gen_loss, mel_spec_loss, loss_stft,phase_loss,amplitude_loss,\
-                20*loss_stft + mpd_gen_loss + msd_gen_loss + 45*mel_spec_loss + 2*mpd_feats_gen_loss + 2*msd_feats_gen_loss + 100*phase_loss + 45*amplitude_loss
+                msd_feats_gen_loss, mel_spec_loss, loss_stft, phase_loss, amplitude_loss,\
+                wav_l1, mrstft,\
+                20*loss_stft + mpd_gen_loss + msd_gen_loss + 45*mel_spec_loss + 2*mpd_feats_gen_loss + 2*msd_feats_gen_loss + 100*phase_loss + 45*amplitude_loss + 45*wav_l1 + 2.5*mrstft
         
         
         

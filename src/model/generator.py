@@ -88,6 +88,100 @@ class ConvNeXtBlock(nn.Module):
         x = residual + x
         return x
 
+class PostnetResBlock(nn.Module):
+    def __init__(self, channels, kernel_size=3, dilations=(1, 3, 5), norm_type="weight"):
+        super().__init__()
+        norm = weight_norm if norm_type == "weight" else spectral_norm
+        self.convs1 = nn.ModuleList([
+            norm(nn.Conv1d(channels, channels, kernel_size, dilation=d,
+                           padding=get_padding(kernel_size, d)))
+            for d in dilations
+        ])
+        self.convs2 = nn.ModuleList([
+            norm(nn.Conv1d(channels, channels, kernel_size, dilation=1,
+                           padding=get_padding(kernel_size, 1)))
+            for _ in dilations
+        ])
+        self.convs1.apply(upsampling_utils.init_weights)
+        self.convs2.apply(upsampling_utils.init_weights)
+
+    def forward(self, x):
+        for c1, c2 in zip(self.convs1, self.convs2):
+            xt = F.leaky_relu(x, 0.1)
+            xt = c1(xt)
+            xt = F.leaky_relu(xt, 0.1)
+            xt = c2(xt)
+            x = xt + x
+        return x
+
+
+class MRF(nn.Module):
+    def __init__(self, channels, kernel_sizes=(3, 7), dilations=((1, 3, 5), (1, 3, 5)), norm_type="weight"):
+        super().__init__()
+        assert len(kernel_sizes) == len(dilations)
+        self.blocks = nn.ModuleList([
+            PostnetResBlock(channels, k, d, norm_type=norm_type)
+            for k, d in zip(kernel_sizes, dilations)
+        ])
+
+    def forward(self, x):
+        out = 0.0
+        for block in self.blocks:
+            out = out + block(x)
+        return out / len(self.blocks)
+
+
+class HiFiGANPostnet(nn.Module):
+    def __init__(
+        self,
+        in_channels=2,
+        channels=16,
+        num_mrf=1,
+        kernel_sizes=(3, 7),
+        dilations=((1, 3, 5), (1, 3, 5)),
+        use_skip_connect=True,
+        final_activation: Literal["tanh", "softclip", "none"] = "softclip",
+        norm_type: Literal["weight", "spectral"] = "weight",
+    ):
+        super().__init__()
+        norm = weight_norm if norm_type == "weight" else spectral_norm
+        self.conv_pre = norm(nn.Conv1d(in_channels, channels, 7, 1, padding=3))
+        self.mrfs = nn.ModuleList([
+            MRF(channels, kernel_sizes, dilations, norm_type=norm_type)
+            for _ in range(num_mrf)
+        ])
+        self.conv_post = norm(nn.Conv1d(channels, 1, 7, 1, padding=3))
+        self.conv_post.apply(upsampling_utils.init_weights)
+
+        self.use_skip_connect = use_skip_connect
+        if use_skip_connect:
+            self.skip = norm(nn.Conv1d(in_channels, 1, 1, 1))
+            with torch.no_grad():
+                self.skip.weight.zero_()
+                self.skip.weight[0, 0, 0] = 1.0
+                self.skip.bias.zero_()
+
+        self.final_activation = final_activation
+
+    def _activate(self, x):
+        if self.final_activation == "tanh":
+            return torch.tanh(x)
+        if self.final_activation == "softclip":
+            return 0.99 * torch.tanh(x / 0.99)
+        return x
+
+    def forward(self, x, reference=None):
+        inp = torch.cat([x, reference], dim=1) if reference is not None else x
+        out = self.conv_pre(inp)
+        for mrf in self.mrfs:
+            out = mrf(out)
+        out = F.leaky_relu(out, 0.1)
+        out = self.conv_post(out)
+        if self.use_skip_connect:
+            out = out + self.skip(inp)
+        return self._activate(out)
+
+
 mel_cache = {}
 inv_mel_cache = {}
 window_cache = {}
@@ -163,6 +257,13 @@ class A2AHiFiPlusGenerator(torch.nn.Module):
         waveunet_block_depth=4,
         waveunet_channels=2,
 
+        use_postnet=False,
+        postnet_channels=16,
+        postnet_num_mrf=1,
+        postnet_kernel_sizes=(3, 7),
+        postnet_dilations=((1, 3, 5), (1, 3, 5)),
+        postnet_final_activation: Literal["tanh", "softclip", "none"] = "softclip",
+
         convnext_dim = 513,
         num_layers_convnext_real = 8,
         num_layers_convnext_imag = 1,
@@ -181,6 +282,8 @@ class A2AHiFiPlusGenerator(torch.nn.Module):
         self.norm_type = norm_type
 
         self.use_waveunet = use_waveunet
+        self.use_postnet = use_postnet
+        assert not (use_waveunet and use_postnet), "use_waveunet and use_postnet are mutually exclusive"
 
         self.use_skip_connect = use_skip_connect
         self.upsampling_block1 = upsampling_utils.UpsampleTwice(upsample_init_channels, upsample_block_rates, upsample_block_kernel_sizes)
@@ -204,11 +307,25 @@ class A2AHiFiPlusGenerator(torch.nn.Module):
 
         self.waveunet_skip_connect = None
         self.spectralmasknet_skip_connect = None
-        if self.use_skip_connect:
+        if self.use_waveunet and self.use_skip_connect:
             self.make_waveunet_skip_connect(waveunet_channels)
 
         self.conv_post = None
-        self.make_conv_post(waveunet_channels)
+        if self.use_waveunet:
+            self.make_conv_post(waveunet_channels)
+
+        self.postnet = None
+        if self.use_postnet:
+            self.postnet = HiFiGANPostnet(
+                in_channels=2,
+                channels=postnet_channels,
+                num_mrf=postnet_num_mrf,
+                kernel_sizes=tuple(postnet_kernel_sizes),
+                dilations=tuple(tuple(d) for d in postnet_dilations),
+                use_skip_connect=use_skip_connect,
+                final_activation=postnet_final_activation,
+                norm_type=norm_type,
+            )
 
         self.waveunet_input = waveunet_input
 
@@ -395,5 +512,7 @@ class A2AHiFiPlusGenerator(torch.nn.Module):
 
             x_res = self.conv_post(x_res)
             x_res = torch.tanh(x_res)
+        elif self.use_postnet:
+            x_res = self.postnet(x_res, padded_reference)
         return x_res[..., :target_size]
     

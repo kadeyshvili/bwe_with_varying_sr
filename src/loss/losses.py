@@ -190,6 +190,8 @@ class HiFiGANLoss(nn.Module):
         self.stft_consistency_loss_ratio_2 = STFT_consistency_loss()
         self.amplitude_loss_ratio_2 = Amplitude_loss()
         self.phase_loss_ratio_2 = Phase_loss()
+        self.wav_l1_ratio_2 = WaveformL1Loss()
+        self.mrstft_ratio_2 = MultiResolutionSTFTLoss()
 
 
         # Loss modules for ratio the second part
@@ -200,6 +202,8 @@ class HiFiGANLoss(nn.Module):
         self.stft_consistency_loss_ratio_3 = STFT_consistency_loss()
         self.amplitude_loss_ratio_3 = Amplitude_loss()
         self.phase_loss_ratio_3 = Phase_loss()
+        self.wav_l1_ratio_3 = WaveformL1Loss()
+        self.mrstft_ratio_3 = MultiResolutionSTFTLoss()
         # Loss modules for full part
         self.disc_loss = DiscriminatorLoss()
         self.gen_loss = GeneratorLoss()
@@ -208,18 +212,16 @@ class HiFiGANLoss(nn.Module):
         self.stft_consistency_loss_ratio = STFT_consistency_loss()
         self.amplitude_loss_ratio = Amplitude_loss()
         self.phase_loss_ratio = Phase_loss()
+        self.wav_l1_ratio = WaveformL1Loss()
+        self.mrstft_ratio = MultiResolutionSTFTLoss()
 
-        # Time-domain losses (улучшают SNR)
-        self.wav_l1 = WaveformL1Loss()
-        self.mrstft = MultiResolutionSTFTLoss()
-
-    def _wav_losses(self, batch):
-        wav_fake = batch["generated_wav"]
-        wav_hr = batch["wav_hr"]
-        wav_l1 = self.wav_l1(wav_fake, wav_hr)
-        sc, log_mag = self.mrstft(wav_fake, wav_hr)
-        mrstft = sc + log_mag
-        return wav_l1, mrstft
+    # def _wav_losses(self, batch):
+    #     wav_fake = batch["generated_wav"]
+    #     wav_hr = batch["wav_hr"]
+    #     wav_l1 = self.wav_l1(wav_fake, wav_hr)
+    #     sc, log_mag = self.mrstft(wav_fake, wav_hr)
+    #     mrstft = sc + log_mag
+    #     return wav_l1, mrstft
         
     def discriminator_loss_2(self, batch):
         mpd_disc_loss = self.disc_loss_ratio_2(batch["mpd_gt_out"], batch["mpd_fake_out"])
@@ -276,7 +278,9 @@ class HiFiGANLoss(nn.Module):
         phase_loss = self.phase_loss_ratio_2(phase_gt, phase_fake, 1024, batch["frames"])
         amplitude_loss = self.amplitude_loss_ratio_2(log_amplitude_gt, log_amplitude_fake)
 
-        wav_l1, mrstft = self._wav_losses(batch)
+        wav_l1 = self.wav_l1_ratio_2(batch["generated_wav"], batch["wav_hr"])
+        sc, log_mag  = self.mrstft_ratio_2(batch["generated_wav"], batch["wav_hr"])
+        mrstft = sc + log_mag
 
         return mpd_gen_loss, msd_gen_loss, mpd_feats_gen_loss,\
                 msd_feats_gen_loss, mel_spec_loss, loss_stft, phase_loss, amplitude_loss,\
@@ -324,7 +328,9 @@ class HiFiGANLoss(nn.Module):
         phase_loss = self.phase_loss_ratio_3(phase_gt, phase_fake, 1024, batch["frames"])
         amplitude_loss = self.amplitude_loss_ratio_3(log_amplitude_gt, log_amplitude_fake)
 
-        wav_l1, mrstft = self._wav_losses(batch)
+        wav_l1 = self.wav_l1_ratio_3(batch["generated_wav"], batch["wav_hr"])
+        sc, log_mag  = self.mrstft_ratio_3(batch["generated_wav"], batch["wav_hr"])
+        mrstft = sc + log_mag
 
         return mpd_gen_loss, msd_gen_loss, mpd_feats_gen_loss,\
                 msd_feats_gen_loss, mel_spec_loss, loss_stft, phase_loss, amplitude_loss,\
@@ -373,7 +379,9 @@ class HiFiGANLoss(nn.Module):
         phase_loss = self.phase_loss_ratio(phase_gt, phase_fake, 1024, batch["frames"])
         amplitude_loss = self.amplitude_loss_ratio(log_amplitude_gt, log_amplitude_fake)
 
-        wav_l1, mrstft = self._wav_losses(batch)
+        wav_l1 = self.wav_l1_ratio(batch["generated_wav"], batch["wav_hr"])
+        sc, log_mag  = self.mrstft_ratio(batch["generated_wav"], batch["wav_hr"])
+        mrstft = sc + log_mag
 
         return mpd_gen_loss, msd_gen_loss, mpd_feats_gen_loss,\
                 msd_feats_gen_loss, mel_spec_loss, loss_stft, phase_loss, amplitude_loss,\

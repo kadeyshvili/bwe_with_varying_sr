@@ -1,12 +1,17 @@
-from abc import abstractmethod
+import os
 
 import torch
 from numpy import inf
 from torch.nn.utils import clip_grad_norm_
 from tqdm.auto import tqdm
 import itertools
+from hydra.utils import instantiate
+from omegaconf import OmegaConf
+from src.datasets.collate import collate_fn
 from src.datasets.data_utils import inf_loop
+from src.logger.utils import plot_spectrogram
 from src.metrics.tracker import MetricTracker
+from src.model.melspec import MelSpectrogram
 from src.utils.io_utils import ROOT_PATH
 from src.metrics.calculate_metrics import calculate_all_metrics
 from src.utils.sr_utils import  get_regime_key
@@ -132,8 +137,13 @@ class BaseTrainer:
             writer=self.writer,
         )
         
-        self.samples_for_logging = defaultdict(list)
-        self.fixed_samples_for_logging = defaultdict(list)  # fixed once, reused every epoch
+        # Build a separate dataset that always loads the same files from
+        # test_for_logging.txt — used only to log a stable set of audios/specs
+        # for cross-run comparison.
+        log_filenames_file = config.trainer.get(
+            "log_filenames_file", "src/VCTK_split/test_for_logging.txt"
+        )
+        self._log_dataset = self._build_log_dataset(config, log_filenames_file)
 
         self.checkpoint_dir = (
             ROOT_PATH / config.trainer.save_dir / config.writer.run_name
@@ -213,7 +223,6 @@ class BaseTrainer:
         self.model.msd.train()
         self.model.mpd.train()
         self.train_metrics.reset()
-        self.samples_for_logging = defaultdict(list)
         self.writer.set_step((epoch - 1) * self.epoch_len)
         self.writer.add_scalar("epoch", epoch)
         last_train_metrics = {}
@@ -238,35 +247,6 @@ class BaseTrainer:
             self.train_metrics.update("discriminator_grad_norm", self._get_grad_norm(itertools.chain(self.model.mpd.parameters(),\
                                                                                                       self.model.msd.parameters())))
 
-            initial_sr = batch['initial_sr']
-            target_sr = batch['target_sr']
-            regime_key = get_regime_key(initial_sr, target_sr)
-            if regime_key not in self.samples_for_logging:
-                self.samples_for_logging[regime_key] = []
-            
-            # Fill fixed_samples_for_logging only once (first epoch); on subsequent epochs
-            # only update model outputs so we always compare the same inputs.
-            if regime_key and len(self.fixed_samples_for_logging[regime_key]) < 7:
-                sample = {
-                    'wav_lr': batch['wav_lr'].clone(),
-                    'wav_hr': batch['wav_hr'].clone(),
-                    'generated_wav': batch['generated_wav'].clone(),
-                    'melspec_lr': batch['melspec_lr'].clone(),
-                    'melspec_hr': batch['melspec_hr'].clone(),
-                    'mel_spec_fake': batch['mel_spec_fake'].clone(),
-                    'initial_sr': initial_sr,
-                    'target_sr': target_sr,
-                    'initial_len_lr': batch['initial_len_lr'],
-                    'initial_len_hr': batch['initial_len_hr'],
-                    'initial_len_melspec_lr': batch['initial_len_melspec_lr'],
-                    'initial_len_melspec_hr': batch['initial_len_melspec_hr'],
-                }
-                self.fixed_samples_for_logging[regime_key].append(sample)
-            else:
-                idx = batch_idx % len(self.fixed_samples_for_logging[regime_key])
-                self.fixed_samples_for_logging[regime_key][idx]['generated_wav'] = batch['generated_wav'].clone()
-                self.fixed_samples_for_logging[regime_key][idx]['mel_spec_fake'] = batch['mel_spec_fake'].clone()
-
             if batch_idx % self.log_step == 0:
                 self.writer.set_step((epoch - 1) * self.epoch_len + batch_idx)
                 regime_key = get_regime_key(batch['initial_sr'], batch['target_sr'])
@@ -275,7 +255,7 @@ class BaseTrainer:
                 if gen_loss_key in batch and disc_loss_key in batch:
                     self.logger.debug(
                         "Train Epoch: {} {} Generator Loss_{}: {:.6f}, Discriminator Loss_{}: {:.6f}".format(
-                            epoch, self._progress(batch_idx), regime_key, batch[gen_loss_key].item(), 
+                            epoch, self._progress(batch_idx), regime_key, batch[gen_loss_key].item(),
                             regime_key, batch[disc_loss_key].item()
                         )
                     )
@@ -286,7 +266,6 @@ class BaseTrainer:
                     "learning_rate_discriminator", self.disc_lr_scheduler.get_last_lr()[0]
                 )
                 self._log_scalars(self.train_metrics)
-                self._log_batch(batch_idx, batch)
                 last_train_metrics = self.train_metrics.result()
                 self.train_metrics.reset(preserve_metrics=True)
             if batch_idx + 1 >= self.epoch_len:
@@ -327,9 +306,7 @@ class BaseTrainer:
                     metric.results[mode] = defaultdict(list)
         
         metrics_by_regime = {}
-        # Track which fixed val slots still need to be filled
-        val_fixed_key = f"{part}_fixed"
-        
+
         with torch.no_grad():
             for batch_idx, batch in tqdm(
                 enumerate(dataloader),
@@ -345,36 +322,9 @@ class BaseTrainer:
                         self.evaluation_metrics.update(key, batch[key].item())
                 initial_sr = batch['initial_sr']
                 target_sr = batch['target_sr']
-                
+
                 regime_key = get_regime_key(initial_sr, target_sr)
-                fixed_key = f"{val_fixed_key}_{regime_key}"
-                
-                # Fill fixed val samples only once (first epoch); on subsequent epochs
-                # only update the model outputs (generated_wav, mel_spec_fake) so we
-                # always compare the same inputs across epochs.
-                if len(self.fixed_samples_for_logging[fixed_key]) < 5:
-                    sample = {
-                        'wav_lr': batch['wav_lr'].clone(),
-                        'wav_hr': batch['wav_hr'].clone(),
-                        'generated_wav': batch['generated_wav'].clone(),
-                        'melspec_lr': batch['melspec_lr'].clone(),
-                        'melspec_hr': batch['melspec_hr'].clone(),
-                        'mel_spec_fake': batch['mel_spec_fake'].clone(),
-                        'initial_sr': initial_sr,
-                        'target_sr': target_sr,
-                        'regime': regime_key,
-                        'initial_len_lr': batch['initial_len_lr'],
-                        'initial_len_hr': batch['initial_len_hr'],
-                        'initial_len_melspec_lr': batch['initial_len_melspec_lr'],
-                        'initial_len_melspec_hr': batch['initial_len_melspec_hr'],
-                    }
-                    self.fixed_samples_for_logging[fixed_key].append(sample)
-                else:
-                    # Update only model outputs for already-fixed samples
-                    idx = batch_idx % len(self.fixed_samples_for_logging[fixed_key])
-                    self.fixed_samples_for_logging[fixed_key][idx]['generated_wav'] = batch['generated_wav'].clone()
-                    self.fixed_samples_for_logging[fixed_key][idx]['mel_spec_fake'] = batch['mel_spec_fake'].clone()
-                
+
                 metrics_to_use = [metric for metric in self.metrics['inference'] if metric.name.endswith(regime_key)]
                 batch_metrics = calculate_all_metrics(
                     batch['generated_wav'], 
@@ -402,7 +352,7 @@ class BaseTrainer:
                         metric.results[mode_key] = defaultdict(list)
                     
             self.writer.set_step(epoch * self.epoch_len, part)
-            self._log_batch(batch_idx, batch, part)
+            self._log_fixed_audios(part)
         
         for regime_key, metrics_dict in metrics_by_regime.items():
             for metric_name, inner_dict in metrics_dict.items():
@@ -528,22 +478,87 @@ class BaseTrainer:
             total = self.epoch_len
         return base.format(current, total, 100.0 * current / total)
 
-    @abstractmethod
-    def _log_batch(self, batch_idx, batch, mode="train"):
+    def _build_log_dataset(self, config, log_filenames_file):
         """
-        Abstract method. Should be defined in the nested Trainer Class.
-
-        Log data from batch. Calls self.writer.add_* to log data
-        to the experiment tracker.
-
-        Args:
-            batch_idx (int): index of the current batch.
-            batch (dict): dict-based batch after going through
-                the 'process_batch' function.
-            mode (str): train or inference. Defines which logging
-                rules to apply.
+        Build a separate dataset that always loads the same files listed in
+        test_for_logging.txt. Inherits all params (wav dirs, SRs) from the
+        validation dataset config, only overrides the split file and disables
+        random cropping so the full audio is used.
         """
-        return NotImplementedError()
+        log_path = ROOT_PATH / log_filenames_file
+        if not log_path.exists() or "val" not in config.datasets:
+            return None
+        override = OmegaConf.create({
+            "dataset_split_file": str(log_path),
+            "split": False,
+        })
+        log_cfg = OmegaConf.merge(config.datasets["val"], override)
+        return instantiate(log_cfg)
+
+    @torch.no_grad()
+    def _log_fixed_audios(self, part):
+        """
+        Run the generator on the fixed log dataset (test_for_logging.txt) and
+        log LR / HR / generated waveforms together with their mel spectrograms.
+        Tags are derived from the audio filename so they stay stable across
+        runs and can be compared in Comet ML.
+        """
+        if self._log_dataset is None or self.writer is None:
+            return
+
+        was_training = self.model.generator.training
+        self.model.generator.eval()
+
+        mode = self._log_dataset.current_mode
+        initial_sr = self._log_dataset.initial_sr
+        target_sr = self._log_dataset.target_sr
+        mel_creator = MelSpectrogram(sr=target_sr).to(self.device)
+
+        for idx in range(len(self._log_dataset)):
+            item = self._log_dataset[(idx, mode)]
+            batch = collate_fn([item])
+            batch = self.move_batch_to_device(batch)
+
+            wav_lr = batch['wav_lr']
+            wav_hr = batch['wav_hr']
+            wav_fake = self.model.generator(wav_lr, **batch)
+            mel_spec_fake = mel_creator(wav_fake).squeeze(1)
+
+            tag = os.path.splitext(os.path.basename(batch['paths_lr'][0]))[0]
+            init_len_lr = batch['initial_len_lr'][0]
+            init_len_hr = batch['initial_len_hr'][0]
+            len_mel_lr = batch['initial_len_melspec_lr'][0]
+            len_mel_hr = batch['initial_len_melspec_hr'][0]
+
+            self.writer.add_audio(
+                f"wav_lr_{initial_sr}_{target_sr}_{tag}",
+                wav_lr[0][:, :init_len_lr].detach().cpu(), initial_sr,
+            )
+            self.writer.add_audio(
+                f"wav_hr_{initial_sr}_{target_sr}_{tag}",
+                wav_hr[0][:, :init_len_hr].detach().cpu(), target_sr,
+            )
+            self.writer.add_audio(
+                f"generated_wav_{initial_sr}_{target_sr}_{tag}",
+                wav_fake[0][:, :init_len_hr].detach().cpu(), target_sr,
+            )
+
+            spec_lr = batch['melspec_lr'][0].detach().cpu()[:, :len_mel_lr]
+            spec_hr = batch['melspec_hr'][0].detach().cpu()[:, :len_mel_hr]
+            spec_fake = mel_spec_fake[0].detach().cpu()
+
+            self.writer.add_image(
+                f"melspec_lr_{initial_sr}_{target_sr}_{tag}", plot_spectrogram(spec_lr),
+            )
+            self.writer.add_image(
+                f"melspec_hr_{initial_sr}_{target_sr}_{tag}", plot_spectrogram(spec_hr),
+            )
+            self.writer.add_image(
+                f"melspec_fake_{initial_sr}_{target_sr}_{tag}", plot_spectrogram(spec_fake),
+            )
+
+        if was_training:
+            self.model.generator.train()
 
     def _log_scalars(self, metric_tracker:  MetricTracker):
         """

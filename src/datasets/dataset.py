@@ -20,7 +20,7 @@ def split_audios(audios_lr, audios_hr, segment_size, split, lr, hr):
             max_audio_start = audios_lr[0].size(1) - segment_size
             audio_start = random.randint(0, max_audio_start)
             audios_lr = [audio[:, audio_start : audio_start + segment_size] for audio in audios_lr]
-            audios_hr = [audio[:, audio_start : audio_start + segment_size * (hr // lr)] for audio in audios_hr]
+            audios_hr = [audio[:, audio_start*(hr // lr) : audio_start*(hr // lr) + segment_size * (hr // lr)] for audio in audios_hr]
         else:
             audios_lr = [torch.nn.functional.pad(audio,(0, segment_size - audio.size(1)),"constant",) for audio in audios_lr]
             audios_hr = [torch.nn.functional.pad(audio,(0, (hr // lr) * segment_size - audio.size(1)),"constant",) for audio in audios_hr]

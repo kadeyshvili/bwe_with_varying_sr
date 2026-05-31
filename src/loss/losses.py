@@ -182,29 +182,6 @@ class MultiResolutionSTFTLoss(nn.Module):
 class HiFiGANLoss(nn.Module):
     def __init__(self):
         super().__init__()
-        # Loss modules for ratio the first part
-        self.disc_loss_ratio_2 = DiscriminatorLoss()
-        self.gen_loss_ratio_2 = GeneratorLoss()
-        self.melspec_loss_ratio_2 = MelSpectrogramLoss()
-        self.fm_loss_ratio_2 = FeatureMatchingLoss()
-        self.stft_consistency_loss_ratio_2 = STFT_consistency_loss()
-        self.amplitude_loss_ratio_2 = Amplitude_loss()
-        self.phase_loss_ratio_2 = Phase_loss()
-        self.wav_l1_ratio_2 = WaveformL1Loss()
-        self.mrstft_ratio_2 = MultiResolutionSTFTLoss()
-
-
-        # Loss modules for ratio the second part
-        self.disc_loss_ratio_3 = DiscriminatorLoss()
-        self.gen_loss_ratio_3 = GeneratorLoss()
-        self.melspec_loss_ratio_3= MelSpectrogramLoss()
-        self.fm_loss_ratio_3 = FeatureMatchingLoss()
-        self.stft_consistency_loss_ratio_3 = STFT_consistency_loss()
-        self.amplitude_loss_ratio_3 = Amplitude_loss()
-        self.phase_loss_ratio_3 = Phase_loss()
-        self.wav_l1_ratio_3 = WaveformL1Loss()
-        self.mrstft_ratio_3 = MultiResolutionSTFTLoss()
-        # Loss modules for full part
         self.disc_loss = DiscriminatorLoss()
         self.gen_loss = GeneratorLoss()
         self.melspec_loss = MelSpectrogramLoss()
@@ -214,129 +191,12 @@ class HiFiGANLoss(nn.Module):
         self.phase_loss_ratio = Phase_loss()
         self.wav_l1_ratio = WaveformL1Loss()
         self.mrstft_ratio = MultiResolutionSTFTLoss()
-
-    # def _wav_losses(self, batch):
-    #     wav_fake = batch["generated_wav"]
-    #     wav_hr = batch["wav_hr"]
-    #     wav_l1 = self.wav_l1(wav_fake, wav_hr)
-    #     sc, log_mag = self.mrstft(wav_fake, wav_hr)
-    #     mrstft = sc + log_mag
-    #     return wav_l1, mrstft
         
-    def discriminator_loss_2(self, batch):
-        mpd_disc_loss = self.disc_loss_ratio_2(batch["mpd_gt_out"], batch["mpd_fake_out"])
-        msd_disc_loss = self.disc_loss_ratio_2(batch["msd_gt_out"], batch["msd_fake_out"])
-        return mpd_disc_loss, msd_disc_loss, mpd_disc_loss + msd_disc_loss
-    
-    def discriminator_loss_3(self, batch):
-        mpd_disc_loss = self.disc_loss_ratio_3(batch["mpd_gt_out"], batch["mpd_fake_out"])
-        msd_disc_loss = self.disc_loss_ratio_3(batch["msd_gt_out"], batch["msd_fake_out"])
-        return mpd_disc_loss, msd_disc_loss, mpd_disc_loss + msd_disc_loss
-    
     def discriminator_loss(self, batch):
         mpd_disc_loss = self.disc_loss(batch["mpd_gt_out"], batch["mpd_fake_out"])
         msd_disc_loss = self.disc_loss(batch["msd_gt_out"], batch["msd_fake_out"])
         return mpd_disc_loss, msd_disc_loss, mpd_disc_loss + msd_disc_loss
     
-    def generator_loss_2(self, batch):
-        mpd_gen_loss = self.gen_loss_ratio_2(batch["mpd_fake_out"])
-        msd_gen_loss = self.gen_loss_ratio_2(batch["msd_fake_out"])   
-
-        mel_spec_loss = self.melspec_loss_ratio_2(batch["mel_spec_hr"], batch["mel_spec_fake"])
-        
-        mpd_feats_gen_loss = self.fm_loss_ratio_2(batch["mpd_gt_feats"], batch["mpd_fake_feats"])
-        msd_feats_gen_loss = self.fm_loss_ratio_2(batch["msd_gt_feats"], batch["msd_fake_feats"])
-
-
-        real_gt = batch['real_gt']
-        imag_gt = batch['imag_gt']
-        real_fake = batch['real_fake']
-        imag_fake = batch['imag_fake']
-        real_gt = real_gt[..., :min(real_gt.shape[-1], real_fake.shape[-1])]
-        real_fake = real_fake[..., :min(real_gt.shape[-1], real_fake.shape[-1])]
-
-        imag_gt = imag_gt[..., :min(imag_gt.shape[-1], imag_fake.shape[-1])]
-        imag_fake = imag_fake[..., :min(imag_gt.shape[-1], imag_fake.shape[-1])]
-
-        phase_gt = batch['phase_gt']
-        phase_fake = batch['phase_fake']
-
-        phase_fake = phase_fake[..., :min(phase_fake.shape[-1], phase_gt.shape[-1])]
-        phase_gt = phase_gt[..., :min(phase_fake.shape[-1], phase_gt.shape[-1])]
-
-        log_amplitude_gt = batch['log_amplitude_gt']
-        log_amplitude_fake = batch['log_amplitude_fake']
-
-        log_amplitude_gt = log_amplitude_gt[..., :min(log_amplitude_gt.shape[-1], log_amplitude_fake.shape[-1])]
-        log_amplitude_fake = log_amplitude_fake[..., :min(log_amplitude_gt.shape[-1], log_amplitude_fake.shape[-1])]
-
-
-        loss_real_part = F.l1_loss(real_gt, real_fake)
-        loss_imag_part = F.l1_loss(imag_gt, imag_fake)
-        stft_consistency_loss = self.stft_consistency_loss_ratio_2(real_fake, imag_fake, real_gt, imag_gt)
-        loss_stft = stft_consistency_loss + 2.25 * (loss_real_part + loss_imag_part)
-        phase_loss = self.phase_loss_ratio_2(phase_gt, phase_fake, 1024, batch["frames"])
-        amplitude_loss = self.amplitude_loss_ratio_2(log_amplitude_gt, log_amplitude_fake)
-
-        wav_l1 = self.wav_l1_ratio_2(batch["generated_wav"], batch["wav_hr"])
-        sc, log_mag  = self.mrstft_ratio_2(batch["generated_wav"], batch["wav_hr"])
-        mrstft = sc + log_mag
-
-        return mpd_gen_loss, msd_gen_loss, mpd_feats_gen_loss,\
-                msd_feats_gen_loss, mel_spec_loss, loss_stft, phase_loss, amplitude_loss,\
-                wav_l1, mrstft,\
-                20*loss_stft + mpd_gen_loss + msd_gen_loss + 45*mel_spec_loss + 2*mpd_feats_gen_loss + 2*msd_feats_gen_loss + 100*phase_loss + 45*amplitude_loss + 45*wav_l1 + 2.5*mrstft
-
-
-    def generator_loss_3(self, batch):
-        mpd_gen_loss = self.gen_loss_ratio_3(batch["mpd_fake_out"])
-        msd_gen_loss = self.gen_loss_ratio_3(batch["msd_fake_out"])   
-
-        mel_spec_loss = self.melspec_loss_ratio_3(batch["mel_spec_hr"], batch["mel_spec_fake"])
-        
-        mpd_feats_gen_loss = self.fm_loss_ratio_3(batch["mpd_gt_feats"], batch["mpd_fake_feats"])
-        msd_feats_gen_loss = self.fm_loss_ratio_3(batch["msd_gt_feats"], batch["msd_fake_feats"])
-
-
-        real_gt = batch['real_gt']
-        imag_gt = batch['imag_gt']
-        real_fake = batch['real_fake']
-        imag_fake = batch['imag_fake']
-
-        real_gt = real_gt[..., :min(real_gt.shape[-1], real_fake.shape[-1])]
-        real_fake = real_fake[..., :min(real_gt.shape[-1], real_fake.shape[-1])]
-
-        imag_gt = imag_gt[..., :min(imag_gt.shape[-1], imag_fake.shape[-1])]
-        imag_fake = imag_fake[..., :min(imag_gt.shape[-1], imag_fake.shape[-1])]
-
-        phase_gt = batch['phase_gt']
-        phase_fake = batch['phase_fake']
-
-        phase_fake = phase_fake[..., :min(phase_fake.shape[-1], phase_gt.shape[-1])]
-        phase_gt = phase_gt[..., :min(phase_fake.shape[-1], phase_gt.shape[-1])]
-
-        log_amplitude_gt = batch['log_amplitude_gt']
-        log_amplitude_fake = batch['log_amplitude_fake']
-
-        log_amplitude_gt = log_amplitude_gt[..., :min(log_amplitude_gt.shape[-1], log_amplitude_fake.shape[-1])]
-        log_amplitude_fake = log_amplitude_fake[..., :min(log_amplitude_gt.shape[-1], log_amplitude_fake.shape[-1])]
-
-        loss_real_part = F.l1_loss(real_gt, real_fake)
-        loss_imag_part = F.l1_loss(imag_gt, imag_fake)
-        stft_consistency_loss = self.stft_consistency_loss_ratio(real_fake, imag_fake, real_gt, imag_gt)
-        loss_stft = stft_consistency_loss + 2.25 * (loss_real_part + loss_imag_part)
-        phase_loss = self.phase_loss_ratio_3(phase_gt, phase_fake, 1024, batch["frames"])
-        amplitude_loss = self.amplitude_loss_ratio_3(log_amplitude_gt, log_amplitude_fake)
-
-        wav_l1 = self.wav_l1_ratio_3(batch["generated_wav"], batch["wav_hr"])
-        sc, log_mag  = self.mrstft_ratio_3(batch["generated_wav"], batch["wav_hr"])
-        mrstft = sc + log_mag
-
-        return mpd_gen_loss, msd_gen_loss, mpd_feats_gen_loss,\
-                msd_feats_gen_loss, mel_spec_loss, loss_stft, phase_loss, amplitude_loss,\
-                wav_l1, mrstft,\
-                20*loss_stft + mpd_gen_loss + msd_gen_loss + 45*mel_spec_loss + 2*mpd_feats_gen_loss + 2*msd_feats_gen_loss + 100*phase_loss + 45*amplitude_loss + 45*wav_l1 + 2.5*mrstft
-
     def generator_loss(self, batch):
         mpd_gen_loss = self.gen_loss(batch["mpd_fake_out"])
         msd_gen_loss = self.gen_loss(batch["msd_fake_out"])   

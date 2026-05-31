@@ -68,16 +68,7 @@ class Trainer(BaseTrainer):
         batch['msd_gt_out'] = msd_gt_out
         batch['msd_fake_out'] = msd_fake_out
         
-        #4-8-16, 8-24-48, 4-8, 8-16, 8-16-48,
-        if (initial_sr==4000 and target_sr==8000) or (initial_sr==8000 and target_sr==24000):
-            mpd_disc_loss, msd_disc_loss, disc_loss = self.criterion.discriminator_loss_2(batch)
-        elif (initial_sr==4000 and target_sr==16000) or (initial_sr==8000 and target_sr==48000):
-            mpd_disc_loss, msd_disc_loss, disc_loss = self.criterion.discriminator_loss(batch)
-        else:
-            mpd_disc_loss, msd_disc_loss, disc_loss = self.criterion.discriminator_loss_3(batch)
-        
-
-
+        mpd_disc_loss, msd_disc_loss, disc_loss = self.criterion.discriminator_loss(batch)
 
         if self.is_train:
             disc_loss.backward()
@@ -113,24 +104,11 @@ class Trainer(BaseTrainer):
         batch['phase_gt'] = phase_gt
         batch['frames'] = phase_gt.shape[-1]
         
-        if (initial_sr==4000 and target_sr==8000) or (initial_sr==8000 and target_sr==24000):
-            mpd_gen_loss, msd_gen_loss,\
-                mpd_feats_gen_loss, msd_feats_gen_loss,\
-                mel_spec_loss, loss_stft, phase_loss, amplitude_loss,\
-                wav_l1_loss, mrstft_loss, gen_loss =\
-                    self.criterion.generator_loss_2(batch)
-        elif (initial_sr==4000 and target_sr==16000) or (initial_sr==8000 and target_sr==48000):
-            mpd_gen_loss, msd_gen_loss,\
-                mpd_feats_gen_loss, msd_feats_gen_loss,\
-                mel_spec_loss, loss_stft, phase_loss, amplitude_loss,\
-                wav_l1_loss, mrstft_loss, gen_loss =\
-                    self.criterion.generator_loss(batch)
-        else:
-            mpd_gen_loss, msd_gen_loss,\
-                mpd_feats_gen_loss, msd_feats_gen_loss,\
-                mel_spec_loss, loss_stft, phase_loss, amplitude_loss,\
-                wav_l1_loss, mrstft_loss, gen_loss =\
-                    self.criterion.generator_loss_3(batch)
+        mpd_gen_loss, msd_gen_loss,\
+            mpd_feats_gen_loss, msd_feats_gen_loss,\
+            mel_spec_loss, loss_stft, phase_loss, amplitude_loss,\
+            wav_l1_loss, mrstft_loss, gen_loss =\
+                self.criterion.generator_loss(batch)
 
         if torch.cuda.is_available():
             torch.cuda.synchronize()

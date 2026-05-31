@@ -74,6 +74,8 @@ class BaseTrainer:
         self.device = device
         self.skip_oom = skip_oom
 
+        self._mel_creators = {}
+
         self.logger = logger
         self.log_step = config.trainer.get("log_step", 50)
 
@@ -430,6 +432,15 @@ class BaseTrainer:
 
 
 
+    def get_mel_creator(self, sr):
+        """
+        Return a cached MelSpectrogram module for the given sample rate,
+        building (and moving to device) it only once per sample rate.
+        """
+        if sr not in self._mel_creators:
+            self._mel_creators[sr] = MelSpectrogram(sr=sr).to(self.device)
+        return self._mel_creators[sr]
+
     def _clip_grad_norm(self, model):
         """
         Clips the gradient norm by the value defined in
@@ -512,7 +523,7 @@ class BaseTrainer:
         mode = self._log_dataset.current_mode
         initial_sr = self._log_dataset.initial_sr
         target_sr = self._log_dataset.target_sr
-        mel_creator = MelSpectrogram(sr=target_sr).to(self.device)
+        mel_creator = self.get_mel_creator(target_sr)
 
         for idx in range(len(self._log_dataset)):
             item = self._log_dataset[(idx, mode)]

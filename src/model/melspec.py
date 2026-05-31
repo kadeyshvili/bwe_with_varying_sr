@@ -7,8 +7,10 @@ import librosa
 
 class MelSpectrogram(nn.Module):
 
-    def __init__(self, sr=16000, win_length=1024, hop_length=256, n_fft= 1024, f_min=0, f_max=8000, n_mels=80 , power=1.0, pad_value=-11.5129251):
+    def __init__(self, sr=16000, win_length=1024, hop_length=256, n_fft= 1024, f_min=0, f_max=None, n_mels=80 , power=1.0, pad_value=-11.5129251):
         super().__init__()
+        if f_max is None:
+            f_max = sr // 2
         self.mel_spectrogram = torchaudio.transforms.MelSpectrogram(
             sample_rate=sr,
             win_length=win_length,

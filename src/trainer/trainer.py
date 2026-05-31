@@ -2,7 +2,6 @@ import torch
 from src.metrics.tracker import MetricTracker
 from src.trainer.base_trainer import BaseTrainer
 import torch.nn.functional as F
-from src.model.melspec import MelSpectrogram
 from src.utils.sr_utils import  get_regime_key
 
 
@@ -55,7 +54,7 @@ class Trainer(BaseTrainer):
         batch["log_amplitude_fake"] = log_amplitude_fake
         batch["phase_fake"] = phase_fake
         
-        mel_spec_creator = MelSpectrogram(sr=target_sr).to(self.device)
+        mel_spec_creator = self.get_mel_creator(target_sr)
         mel_spec_fake = mel_spec_creator(wav_fake).squeeze(1)
         batch['mel_spec_fake'] = mel_spec_fake
         if self.is_train:
@@ -81,11 +80,9 @@ class Trainer(BaseTrainer):
 
 
         if self.is_train:
+            disc_loss.backward()
             self._clip_grad_norm(self.model.mpd)
             self._clip_grad_norm(self.model.msd)
-
-        if self.is_train:
-            disc_loss.backward()
             self.disc_optimizer.step()
             self.gen_optimizer.zero_grad()
 
@@ -100,7 +97,7 @@ class Trainer(BaseTrainer):
         batch["msd_fake_feats"] = msd_fake_feats
         batch["msd_gt_feats"] = msd_gt_feats
 
-        target_mel_spec_creator = MelSpectrogram(sr=target_sr).to(self.device)
+        target_mel_spec_creator = self.get_mel_creator(target_sr)
         target_melspec = target_mel_spec_creator(target_wav.squeeze(1))
         batch['mel_spec_hr'] = target_melspec
 
@@ -138,8 +135,8 @@ class Trainer(BaseTrainer):
         if torch.cuda.is_available():
             torch.cuda.synchronize()
         if self.is_train:
-            self._clip_grad_norm(self.model.generator)
             gen_loss.backward()
+            self._clip_grad_norm(self.model.generator)
             self.gen_optimizer.step()
 
         regime_key = get_regime_key(initial_sr, target_sr)

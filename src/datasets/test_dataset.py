@@ -3,7 +3,7 @@ from src.datasets.base_dataset import BaseDataset
 import os
 import librosa
 import torch
-from librosa.util import normalize
+import numpy as np
 from .dataset import split_audios, get_dataset_filelist
 from src.model.melspec import  MelSpectrogram
 
@@ -45,14 +45,16 @@ class VCTKTestDataset(BaseDataset):
         (vctk_audio_lr,), (vctk_audio_hr, ) = split_audios([vctk_audio_lr], [vctk_audio_hr], self.segment_size, self.split, self.initial_sr, self.target_sr)
         
 
-        input_audio_lr = normalize(vctk_audio_lr)[None] * 0.95
-        
+        peak = max(np.abs(vctk_audio_lr).max(), np.abs(vctk_audio_hr).max())
+        scale = 0.95 / peak if peak > 0 else 1.0
+        input_audio_lr = (vctk_audio_lr * scale)[None]
+
         reference_wav = librosa.resample(
-                    vctk_audio_lr, orig_sr=self.initial_sr, target_sr=self.target_sr, res_type="polyphase"
+                    vctk_audio_lr * scale, orig_sr=self.initial_sr, target_sr=self.target_sr, res_type="polyphase"
                 )
         reference_wav = torch.FloatTensor(reference_wav)
 
-        input_audio_hr = normalize(vctk_audio_hr)[None] * 0.95
+        input_audio_hr = (vctk_audio_hr * scale)[None]
         assert input_audio_lr.shape[1] == vctk_audio_lr.size
         assert input_audio_hr.shape[1] == vctk_audio_hr.size
 

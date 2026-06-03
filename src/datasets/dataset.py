@@ -202,7 +202,7 @@ class VCTKDataset(Dataset):
 
         (vctk_audio_lr,), (vctk_audio_hr, ) = split_audios([vctk_audio_lr], [vctk_audio_hr], self.segment_size, self.split, self.initial_sr, self.target_sr)
 
-        peak = max(np.abs(vctk_audio_lr).max(), np.abs(vctk_audio_hr).max())
+        peak = np.abs(vctk_audio_lr).max()
         scale = 0.95 / peak if peak > 0 else 1.0
         input_audio_lr = (vctk_audio_lr * scale)[None]
         input_audio_hr = (vctk_audio_hr * scale)[None]
